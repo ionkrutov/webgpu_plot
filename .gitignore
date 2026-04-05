@@ -1,0 +1,13 @@
+dist/*
+node_modules/*
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment variables
+.env
+.env.local

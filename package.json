@@ -1,0 +1,27 @@
+{
+  "name": "webgpu_plot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --outfile=dist/index.js --format=esm",
+    "watch": "esbuild src/index.ts --bundle --outfile=dist/index.js --format=esm --watch",
+    "serve": "npm run build && http-server",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@types/earcut": "^3.0.0",
+    "@types/opentype.js": "^1.3.9",
+    "@webgpu/types": "^0.1.69",
+    "esbuild": "^0.27.3",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "earcut": "^3.0.2",
+    "opentype.js": "^1.3.4"
+  }
+}
