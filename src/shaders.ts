@@ -192,9 +192,9 @@ struct MarkerParams {
 @group(0) @binding(1) var<storage, read>       pts: array<f32>;    // x0,y0,x1,y1,...
 @group(0) @binding(2) var<storage, read_write> out: array<f32>;    // 6 verts * 15 floats / marker
 
-export const VERTS: u32 = 6u;
-export const FPV:   u32 = 15u;   // floats per vertex
-export const FPM:   u32 = 90u;   // floats per marker = VERTS * FPV
+const VERTS: u32 = 6u;
+const FPV:   u32 = 15u;   // floats per vertex
+const FPM:   u32 = 90u;   // floats per marker = VERTS * FPV
 
 @compute @workgroup_size(64)
 fn csMarker(@builtin(global_invocation_id) gid: vec3u) {
@@ -231,15 +231,23 @@ fn csMarker(@builtin(global_invocation_id) gid: vec3u) {
     let outerS = mp.outerR * mp.ssaa;
     let innerS = mp.innerR * mp.ssaa;   // negative means hollow
 
-    // Bounding quad corners in clip space
-    let qx0 = (cx - mp.outerR) / hw - 1.0;
-    let qx1 = (cx + mp.outerR) / hw - 1.0;
-    let qy0 = 1.0 - (cy - mp.outerR) / hh;
-    let qy1 = 1.0 - (cy + mp.outerR) / hh;
+    // Bounding quad: extend by edge-band half-width so the full edge ring is rasterised.
+    // The edge band spans [outerS-ew, outerS+ew]; without padding the outer half is clipped.
+    let ewCss = mp.outerR - abs(mp.innerR);   // edge half-width in CSS pixels
+    let qr    = mp.outerR + ewCss;            // bounding-box half-size in CSS pixels
+    let qx0 = (cx - qr) / hw - 1.0;
+    let qx1 = (cx + qr) / hw - 1.0;
+    let qy0 = 1.0 - (cy - qr) / hh;
+    let qy1 = 1.0 - (cy + qr) / hh;
 
     let fr = mp.faceR; let fg = mp.faceG; let fb = mp.faceB; let fa = mp.faceA;
     let er = mp.edgeR; let eg = mp.edgeG; let eb = mp.edgeB;
     let sid = f32(mp.shapeId);
+
+    // Per-vertex offset from marker centre in SSAA pixels (used as SDF input in fragment shader)
+    let QR = qr * mp.ssaa;
+    var lx = array<f32, 6>(-QR, -QR, QR,  -QR, QR, QR);
+    var ly = array<f32, 6>(-QR,  QR, QR,  -QR, QR, -QR);
 
     // Quad corners: TL, BL, BR,  TL, BR, TR
     var px = array<f32, 6>(qx0, qx0, qx1,  qx0, qx1, qx1);
@@ -248,7 +256,7 @@ fn csMarker(@builtin(global_invocation_id) gid: vec3u) {
     for (var v = 0u; v < VERTS; v++) {
         let vb = base + v * FPV;
         out[vb]      = px[v]; out[vb+1u]  = py[v];    // clip pos
-        out[vb+2u]   = cxS;   out[vb+3u]  = cyS;      // centre (ssaa px)
+        out[vb+2u]   = lx[v]; out[vb+3u]  = ly[v];    // local offset from centre (ssaa px)
         out[vb+4u]   = outerS; out[vb+5u] = innerS;   // radii (ssaa px)
         out[vb+6u]   = fr;    out[vb+7u]  = fg;        // face rgba
         out[vb+8u]   = fb;    out[vb+9u]  = fa;
@@ -270,7 +278,7 @@ fn csMarker(@builtin(global_invocation_id) gid: vec3u) {
 export const markerShaderCode = `
 struct VSIn {
     @location(0) clipPos:  vec2f,
-    @location(1) center:   vec2f,   // SSAA fb pixels
+    @location(1) localPos: vec2f,   // offset from marker centre in SSAA pixels
     @location(2) radii:    vec2f,   // (outerR, innerR) SSAA pixels; innerR<0 → hollow
     @location(3) faceCol:  vec4f,   // rgba
     @location(4) edgeCol:  vec4f,   // rgba
@@ -278,7 +286,7 @@ struct VSIn {
 }
 struct VSOut {
     @builtin(position) pos: vec4f,
-    @location(0) center:    vec2f,
+    @location(0) localPos:  vec2f,
     @location(1) radii:     vec2f,
     @location(2) faceCol:   vec4f,
     @location(3) edgeCol:   vec4f,
@@ -286,12 +294,12 @@ struct VSOut {
 }
 @vertex fn vsMarker(v: VSIn) -> VSOut {
     var o: VSOut;
-    o.pos     = vec4f(v.clipPos, 0.0, 1.0);
-    o.center  = v.center;
-    o.radii   = v.radii;
-    o.faceCol = v.faceCol;
-    o.edgeCol = v.edgeCol;
-    o.shapeId = v.shapeId;
+    o.pos      = vec4f(v.clipPos, 0.0, 1.0);
+    o.localPos = v.localPos;
+    o.radii    = v.radii;
+    o.faceCol  = v.faceCol;
+    o.edgeCol  = v.edgeCol;
+    o.shapeId  = v.shapeId;
     return o;
 }
 
@@ -379,7 +387,7 @@ fn sdfX(p: vec2f, r: f32, ew: f32) -> f32 {
     let innerR  = in.radii.y;           // negative → hollow
     let hollow  = innerR < 0.0;
     let ew      = outerR - abs(innerR); // edge half-width
-    let p       = in.pos.xy - in.center;
+    let p       = in.localPos;          // offset from marker centre in SSAA pixels
     let sid     = u32(in.shapeId + 0.5);
 
     var d: f32;

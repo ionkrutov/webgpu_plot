@@ -1,7 +1,4 @@
 var __getOwnPropNames = Object.getOwnPropertyNames;
-var __esm = (fn, res) => function __init() {
-  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
-};
 var __commonJS = (cb, mod) => function __require() {
   return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
 };
@@ -13,6 +10,57 @@ var require_fs = __commonJS({
 });
 
 // node_modules/opentype.js/dist/opentype.module.js
+if (!String.prototype.codePointAt) {
+  (function() {
+    var defineProperty = (function() {
+      try {
+        var object = {};
+        var $defineProperty = Object.defineProperty;
+        var result = $defineProperty(object, object, object) && $defineProperty;
+      } catch (error) {
+      }
+      return result;
+    })();
+    var codePointAt = function(position) {
+      if (this == null) {
+        throw TypeError();
+      }
+      var string = String(this);
+      var size = string.length;
+      var index = position ? Number(position) : 0;
+      if (index != index) {
+        index = 0;
+      }
+      if (index < 0 || index >= size) {
+        return void 0;
+      }
+      var first = string.charCodeAt(index);
+      var second;
+      if (
+        // check if it’s the start of a surrogate pair
+        first >= 55296 && first <= 56319 && // high surrogate
+        size > index + 1
+      ) {
+        second = string.charCodeAt(index + 1);
+        if (second >= 56320 && second <= 57343) {
+          return (first - 55296) * 1024 + second - 56320 + 65536;
+        }
+      }
+      return first;
+    };
+    if (defineProperty) {
+      defineProperty(String.prototype, "codePointAt", {
+        "value": codePointAt,
+        "configurable": true,
+        "writable": true
+      });
+    } else {
+      String.prototype.codePointAt = codePointAt;
+    }
+  })();
+}
+var TINF_OK = 0;
+var TINF_DATA_ERROR = -3;
 function Tree() {
   this.table = new Uint16Array(16);
   this.trans = new Uint16Array(288);
@@ -27,6 +75,35 @@ function Data(source, dest) {
   this.ltree = new Tree();
   this.dtree = new Tree();
 }
+var sltree = new Tree();
+var sdtree = new Tree();
+var length_bits = new Uint8Array(30);
+var length_base = new Uint16Array(30);
+var dist_bits = new Uint8Array(30);
+var dist_base = new Uint16Array(30);
+var clcidx = new Uint8Array([
+  16,
+  17,
+  18,
+  0,
+  8,
+  7,
+  9,
+  6,
+  10,
+  5,
+  11,
+  4,
+  12,
+  3,
+  13,
+  2,
+  14,
+  1,
+  15
+]);
+var code_tree = new Tree();
+var lengths = new Uint8Array(288 + 32);
 function tinf_build_bits_base(bits, base, delta, first) {
   var i, sum;
   for (i = 0; i < delta; ++i) {
@@ -68,6 +145,7 @@ function tinf_build_fixed_trees(lt, dt) {
     dt.trans[i] = i;
   }
 }
+var offs = new Uint16Array(16);
 function tinf_build_tree(t, lengths2, off, num) {
   var i, sum;
   for (i = 0; i < 16; ++i) {
@@ -243,6 +321,12 @@ function tinf_uncompress(source, dest) {
   }
   return d.dest;
 }
+tinf_build_fixed_trees(sltree, sdtree);
+tinf_build_bits_base(length_bits, length_base, 4, 3);
+tinf_build_bits_base(dist_bits, dist_base, 2, 1);
+length_bits[28] = 0;
+length_base[28] = 258;
+var tinyInflate = tinf_uncompress;
 function derive(v0, v1, v2, v3, t) {
   return Math.pow(1 - t, 3) * v0 + 3 * Math.pow(1 - t, 2) * t * v1 + 3 * (1 - t) * Math.pow(t, 2) * v2 + Math.pow(t, 3) * v3;
 }
@@ -252,12 +336,286 @@ function BoundingBox() {
   this.x2 = Number.NaN;
   this.y2 = Number.NaN;
 }
+BoundingBox.prototype.isEmpty = function() {
+  return isNaN(this.x1) || isNaN(this.y1) || isNaN(this.x2) || isNaN(this.y2);
+};
+BoundingBox.prototype.addPoint = function(x, y) {
+  if (typeof x === "number") {
+    if (isNaN(this.x1) || isNaN(this.x2)) {
+      this.x1 = x;
+      this.x2 = x;
+    }
+    if (x < this.x1) {
+      this.x1 = x;
+    }
+    if (x > this.x2) {
+      this.x2 = x;
+    }
+  }
+  if (typeof y === "number") {
+    if (isNaN(this.y1) || isNaN(this.y2)) {
+      this.y1 = y;
+      this.y2 = y;
+    }
+    if (y < this.y1) {
+      this.y1 = y;
+    }
+    if (y > this.y2) {
+      this.y2 = y;
+    }
+  }
+};
+BoundingBox.prototype.addX = function(x) {
+  this.addPoint(x, null);
+};
+BoundingBox.prototype.addY = function(y) {
+  this.addPoint(null, y);
+};
+BoundingBox.prototype.addBezier = function(x0, y0, x1, y1, x2, y2, x, y) {
+  var p0 = [x0, y0];
+  var p1 = [x1, y1];
+  var p2 = [x2, y2];
+  var p3 = [x, y];
+  this.addPoint(x0, y0);
+  this.addPoint(x, y);
+  for (var i = 0; i <= 1; i++) {
+    var b = 6 * p0[i] - 12 * p1[i] + 6 * p2[i];
+    var a = -3 * p0[i] + 9 * p1[i] - 9 * p2[i] + 3 * p3[i];
+    var c = 3 * p1[i] - 3 * p0[i];
+    if (a === 0) {
+      if (b === 0) {
+        continue;
+      }
+      var t = -c / b;
+      if (0 < t && t < 1) {
+        if (i === 0) {
+          this.addX(derive(p0[i], p1[i], p2[i], p3[i], t));
+        }
+        if (i === 1) {
+          this.addY(derive(p0[i], p1[i], p2[i], p3[i], t));
+        }
+      }
+      continue;
+    }
+    var b2ac = Math.pow(b, 2) - 4 * c * a;
+    if (b2ac < 0) {
+      continue;
+    }
+    var t1 = (-b + Math.sqrt(b2ac)) / (2 * a);
+    if (0 < t1 && t1 < 1) {
+      if (i === 0) {
+        this.addX(derive(p0[i], p1[i], p2[i], p3[i], t1));
+      }
+      if (i === 1) {
+        this.addY(derive(p0[i], p1[i], p2[i], p3[i], t1));
+      }
+    }
+    var t2 = (-b - Math.sqrt(b2ac)) / (2 * a);
+    if (0 < t2 && t2 < 1) {
+      if (i === 0) {
+        this.addX(derive(p0[i], p1[i], p2[i], p3[i], t2));
+      }
+      if (i === 1) {
+        this.addY(derive(p0[i], p1[i], p2[i], p3[i], t2));
+      }
+    }
+  }
+};
+BoundingBox.prototype.addQuad = function(x0, y0, x1, y1, x, y) {
+  var cp1x = x0 + 2 / 3 * (x1 - x0);
+  var cp1y = y0 + 2 / 3 * (y1 - y0);
+  var cp2x = cp1x + 1 / 3 * (x - x0);
+  var cp2y = cp1y + 1 / 3 * (y - y0);
+  this.addBezier(x0, y0, cp1x, cp1y, cp2x, cp2y, x, y);
+};
 function Path() {
   this.commands = [];
   this.fill = "black";
   this.stroke = null;
   this.strokeWidth = 1;
 }
+Path.prototype.moveTo = function(x, y) {
+  this.commands.push({
+    type: "M",
+    x,
+    y
+  });
+};
+Path.prototype.lineTo = function(x, y) {
+  this.commands.push({
+    type: "L",
+    x,
+    y
+  });
+};
+Path.prototype.curveTo = Path.prototype.bezierCurveTo = function(x1, y1, x2, y2, x, y) {
+  this.commands.push({
+    type: "C",
+    x1,
+    y1,
+    x2,
+    y2,
+    x,
+    y
+  });
+};
+Path.prototype.quadTo = Path.prototype.quadraticCurveTo = function(x1, y1, x, y) {
+  this.commands.push({
+    type: "Q",
+    x1,
+    y1,
+    x,
+    y
+  });
+};
+Path.prototype.close = Path.prototype.closePath = function() {
+  this.commands.push({
+    type: "Z"
+  });
+};
+Path.prototype.extend = function(pathOrCommands) {
+  if (pathOrCommands.commands) {
+    pathOrCommands = pathOrCommands.commands;
+  } else if (pathOrCommands instanceof BoundingBox) {
+    var box = pathOrCommands;
+    this.moveTo(box.x1, box.y1);
+    this.lineTo(box.x2, box.y1);
+    this.lineTo(box.x2, box.y2);
+    this.lineTo(box.x1, box.y2);
+    this.close();
+    return;
+  }
+  Array.prototype.push.apply(this.commands, pathOrCommands);
+};
+Path.prototype.getBoundingBox = function() {
+  var box = new BoundingBox();
+  var startX = 0;
+  var startY = 0;
+  var prevX = 0;
+  var prevY = 0;
+  for (var i = 0; i < this.commands.length; i++) {
+    var cmd = this.commands[i];
+    switch (cmd.type) {
+      case "M":
+        box.addPoint(cmd.x, cmd.y);
+        startX = prevX = cmd.x;
+        startY = prevY = cmd.y;
+        break;
+      case "L":
+        box.addPoint(cmd.x, cmd.y);
+        prevX = cmd.x;
+        prevY = cmd.y;
+        break;
+      case "Q":
+        box.addQuad(prevX, prevY, cmd.x1, cmd.y1, cmd.x, cmd.y);
+        prevX = cmd.x;
+        prevY = cmd.y;
+        break;
+      case "C":
+        box.addBezier(prevX, prevY, cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x, cmd.y);
+        prevX = cmd.x;
+        prevY = cmd.y;
+        break;
+      case "Z":
+        prevX = startX;
+        prevY = startY;
+        break;
+      default:
+        throw new Error("Unexpected path command " + cmd.type);
+    }
+  }
+  if (box.isEmpty()) {
+    box.addPoint(0, 0);
+  }
+  return box;
+};
+Path.prototype.draw = function(ctx) {
+  ctx.beginPath();
+  for (var i = 0; i < this.commands.length; i += 1) {
+    var cmd = this.commands[i];
+    if (cmd.type === "M") {
+      ctx.moveTo(cmd.x, cmd.y);
+    } else if (cmd.type === "L") {
+      ctx.lineTo(cmd.x, cmd.y);
+    } else if (cmd.type === "C") {
+      ctx.bezierCurveTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x, cmd.y);
+    } else if (cmd.type === "Q") {
+      ctx.quadraticCurveTo(cmd.x1, cmd.y1, cmd.x, cmd.y);
+    } else if (cmd.type === "Z") {
+      ctx.closePath();
+    }
+  }
+  if (this.fill) {
+    ctx.fillStyle = this.fill;
+    ctx.fill();
+  }
+  if (this.stroke) {
+    ctx.strokeStyle = this.stroke;
+    ctx.lineWidth = this.strokeWidth;
+    ctx.stroke();
+  }
+};
+Path.prototype.toPathData = function(decimalPlaces) {
+  decimalPlaces = decimalPlaces !== void 0 ? decimalPlaces : 2;
+  function floatToString(v) {
+    if (Math.round(v) === v) {
+      return "" + Math.round(v);
+    } else {
+      return v.toFixed(decimalPlaces);
+    }
+  }
+  function packValues() {
+    var arguments$1 = arguments;
+    var s = "";
+    for (var i2 = 0; i2 < arguments.length; i2 += 1) {
+      var v = arguments$1[i2];
+      if (v >= 0 && i2 > 0) {
+        s += " ";
+      }
+      s += floatToString(v);
+    }
+    return s;
+  }
+  var d = "";
+  for (var i = 0; i < this.commands.length; i += 1) {
+    var cmd = this.commands[i];
+    if (cmd.type === "M") {
+      d += "M" + packValues(cmd.x, cmd.y);
+    } else if (cmd.type === "L") {
+      d += "L" + packValues(cmd.x, cmd.y);
+    } else if (cmd.type === "C") {
+      d += "C" + packValues(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x, cmd.y);
+    } else if (cmd.type === "Q") {
+      d += "Q" + packValues(cmd.x1, cmd.y1, cmd.x, cmd.y);
+    } else if (cmd.type === "Z") {
+      d += "Z";
+    }
+  }
+  return d;
+};
+Path.prototype.toSVG = function(decimalPlaces) {
+  var svg = '<path d="';
+  svg += this.toPathData(decimalPlaces);
+  svg += '"';
+  if (this.fill && this.fill !== "black") {
+    if (this.fill === null) {
+      svg += ' fill="none"';
+    } else {
+      svg += ' fill="' + this.fill + '"';
+    }
+  }
+  if (this.stroke) {
+    svg += ' stroke="' + this.stroke + '" stroke-width="' + this.strokeWidth + '"';
+  }
+  svg += "/>";
+  return svg;
+};
+Path.prototype.toDOMElement = function(decimalPlaces) {
+  var temporaryPath = this.toPathData(decimalPlaces);
+  var newPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  newPath.setAttribute("d", temporaryPath);
+  return newPath;
+};
 function fail(message) {
   throw new Error(message);
 }
@@ -266,11 +624,301 @@ function argument(predicate, message) {
     fail(message);
   }
 }
+var check = { fail, argument, assert: argument };
+var LIMIT16 = 32768;
+var LIMIT32 = 2147483648;
+var decode = {};
+var encode = {};
+var sizeOf = {};
 function constant(v) {
   return function() {
     return v;
   };
 }
+encode.BYTE = function(v) {
+  check.argument(v >= 0 && v <= 255, "Byte value should be between 0 and 255.");
+  return [v];
+};
+sizeOf.BYTE = constant(1);
+encode.CHAR = function(v) {
+  return [v.charCodeAt(0)];
+};
+sizeOf.CHAR = constant(1);
+encode.CHARARRAY = function(v) {
+  if (typeof v === "undefined") {
+    v = "";
+    console.warn("Undefined CHARARRAY encountered and treated as an empty string. This is probably caused by a missing glyph name.");
+  }
+  var b = [];
+  for (var i = 0; i < v.length; i += 1) {
+    b[i] = v.charCodeAt(i);
+  }
+  return b;
+};
+sizeOf.CHARARRAY = function(v) {
+  if (typeof v === "undefined") {
+    return 0;
+  }
+  return v.length;
+};
+encode.USHORT = function(v) {
+  return [v >> 8 & 255, v & 255];
+};
+sizeOf.USHORT = constant(2);
+encode.SHORT = function(v) {
+  if (v >= LIMIT16) {
+    v = -(2 * LIMIT16 - v);
+  }
+  return [v >> 8 & 255, v & 255];
+};
+sizeOf.SHORT = constant(2);
+encode.UINT24 = function(v) {
+  return [v >> 16 & 255, v >> 8 & 255, v & 255];
+};
+sizeOf.UINT24 = constant(3);
+encode.ULONG = function(v) {
+  return [v >> 24 & 255, v >> 16 & 255, v >> 8 & 255, v & 255];
+};
+sizeOf.ULONG = constant(4);
+encode.LONG = function(v) {
+  if (v >= LIMIT32) {
+    v = -(2 * LIMIT32 - v);
+  }
+  return [v >> 24 & 255, v >> 16 & 255, v >> 8 & 255, v & 255];
+};
+sizeOf.LONG = constant(4);
+encode.FIXED = encode.ULONG;
+sizeOf.FIXED = sizeOf.ULONG;
+encode.FWORD = encode.SHORT;
+sizeOf.FWORD = sizeOf.SHORT;
+encode.UFWORD = encode.USHORT;
+sizeOf.UFWORD = sizeOf.USHORT;
+encode.LONGDATETIME = function(v) {
+  return [0, 0, 0, 0, v >> 24 & 255, v >> 16 & 255, v >> 8 & 255, v & 255];
+};
+sizeOf.LONGDATETIME = constant(8);
+encode.TAG = function(v) {
+  check.argument(v.length === 4, "Tag should be exactly 4 ASCII characters.");
+  return [
+    v.charCodeAt(0),
+    v.charCodeAt(1),
+    v.charCodeAt(2),
+    v.charCodeAt(3)
+  ];
+};
+sizeOf.TAG = constant(4);
+encode.Card8 = encode.BYTE;
+sizeOf.Card8 = sizeOf.BYTE;
+encode.Card16 = encode.USHORT;
+sizeOf.Card16 = sizeOf.USHORT;
+encode.OffSize = encode.BYTE;
+sizeOf.OffSize = sizeOf.BYTE;
+encode.SID = encode.USHORT;
+sizeOf.SID = sizeOf.USHORT;
+encode.NUMBER = function(v) {
+  if (v >= -107 && v <= 107) {
+    return [v + 139];
+  } else if (v >= 108 && v <= 1131) {
+    v = v - 108;
+    return [(v >> 8) + 247, v & 255];
+  } else if (v >= -1131 && v <= -108) {
+    v = -v - 108;
+    return [(v >> 8) + 251, v & 255];
+  } else if (v >= -32768 && v <= 32767) {
+    return encode.NUMBER16(v);
+  } else {
+    return encode.NUMBER32(v);
+  }
+};
+sizeOf.NUMBER = function(v) {
+  return encode.NUMBER(v).length;
+};
+encode.NUMBER16 = function(v) {
+  return [28, v >> 8 & 255, v & 255];
+};
+sizeOf.NUMBER16 = constant(3);
+encode.NUMBER32 = function(v) {
+  return [29, v >> 24 & 255, v >> 16 & 255, v >> 8 & 255, v & 255];
+};
+sizeOf.NUMBER32 = constant(5);
+encode.REAL = function(v) {
+  var value = v.toString();
+  var m = /\.(\d*?)(?:9{5,20}|0{5,20})\d{0,2}(?:e(.+)|$)/.exec(value);
+  if (m) {
+    var epsilon = parseFloat("1e" + ((m[2] ? +m[2] : 0) + m[1].length));
+    value = (Math.round(v * epsilon) / epsilon).toString();
+  }
+  var nibbles = "";
+  for (var i = 0, ii = value.length; i < ii; i += 1) {
+    var c = value[i];
+    if (c === "e") {
+      nibbles += value[++i] === "-" ? "c" : "b";
+    } else if (c === ".") {
+      nibbles += "a";
+    } else if (c === "-") {
+      nibbles += "e";
+    } else {
+      nibbles += c;
+    }
+  }
+  nibbles += nibbles.length & 1 ? "f" : "ff";
+  var out = [30];
+  for (var i$1 = 0, ii$1 = nibbles.length; i$1 < ii$1; i$1 += 2) {
+    out.push(parseInt(nibbles.substr(i$1, 2), 16));
+  }
+  return out;
+};
+sizeOf.REAL = function(v) {
+  return encode.REAL(v).length;
+};
+encode.NAME = encode.CHARARRAY;
+sizeOf.NAME = sizeOf.CHARARRAY;
+encode.STRING = encode.CHARARRAY;
+sizeOf.STRING = sizeOf.CHARARRAY;
+decode.UTF8 = function(data, offset, numBytes) {
+  var codePoints = [];
+  var numChars = numBytes;
+  for (var j = 0; j < numChars; j++, offset += 1) {
+    codePoints[j] = data.getUint8(offset);
+  }
+  return String.fromCharCode.apply(null, codePoints);
+};
+decode.UTF16 = function(data, offset, numBytes) {
+  var codePoints = [];
+  var numChars = numBytes / 2;
+  for (var j = 0; j < numChars; j++, offset += 2) {
+    codePoints[j] = data.getUint16(offset);
+  }
+  return String.fromCharCode.apply(null, codePoints);
+};
+encode.UTF16 = function(v) {
+  var b = [];
+  for (var i = 0; i < v.length; i += 1) {
+    var codepoint = v.charCodeAt(i);
+    b[b.length] = codepoint >> 8 & 255;
+    b[b.length] = codepoint & 255;
+  }
+  return b;
+};
+sizeOf.UTF16 = function(v) {
+  return v.length * 2;
+};
+var eightBitMacEncodings = {
+  "x-mac-croatian": (
+    // Python: 'mac_croatian'
+    "\xC4\xC5\xC7\xC9\xD1\xD6\xDC\xE1\xE0\xE2\xE4\xE3\xE5\xE7\xE9\xE8\xEA\xEB\xED\xEC\xEE\xEF\xF1\xF3\xF2\xF4\xF6\xF5\xFA\xF9\xFB\xFC\u2020\xB0\xA2\xA3\xA7\u2022\xB6\xDF\xAE\u0160\u2122\xB4\xA8\u2260\u017D\xD8\u221E\xB1\u2264\u2265\u2206\xB5\u2202\u2211\u220F\u0161\u222B\xAA\xBA\u03A9\u017E\xF8\xBF\xA1\xAC\u221A\u0192\u2248\u0106\xAB\u010C\u2026\xA0\xC0\xC3\xD5\u0152\u0153\u0110\u2014\u201C\u201D\u2018\u2019\xF7\u25CA\uF8FF\xA9\u2044\u20AC\u2039\u203A\xC6\xBB\u2013\xB7\u201A\u201E\u2030\xC2\u0107\xC1\u010D\xC8\xCD\xCE\xCF\xCC\xD3\xD4\u0111\xD2\xDA\xDB\xD9\u0131\u02C6\u02DC\xAF\u03C0\xCB\u02DA\xB8\xCA\xE6\u02C7"
+  ),
+  "x-mac-cyrillic": (
+    // Python: 'mac_cyrillic'
+    "\u0410\u0411\u0412\u0413\u0414\u0415\u0416\u0417\u0418\u0419\u041A\u041B\u041C\u041D\u041E\u041F\u0420\u0421\u0422\u0423\u0424\u0425\u0426\u0427\u0428\u0429\u042A\u042B\u042C\u042D\u042E\u042F\u2020\xB0\u0490\xA3\xA7\u2022\xB6\u0406\xAE\xA9\u2122\u0402\u0452\u2260\u0403\u0453\u221E\xB1\u2264\u2265\u0456\xB5\u0491\u0408\u0404\u0454\u0407\u0457\u0409\u0459\u040A\u045A\u0458\u0405\xAC\u221A\u0192\u2248\u2206\xAB\xBB\u2026\xA0\u040B\u045B\u040C\u045C\u0455\u2013\u2014\u201C\u201D\u2018\u2019\xF7\u201E\u040E\u045E\u040F\u045F\u2116\u0401\u0451\u044F\u0430\u0431\u0432\u0433\u0434\u0435\u0436\u0437\u0438\u0439\u043A\u043B\u043C\u043D\u043E\u043F\u0440\u0441\u0442\u0443\u0444\u0445\u0446\u0447\u0448\u0449\u044A\u044B\u044C\u044D\u044E"
+  ),
+  "x-mac-gaelic": (
+    // http://unicode.org/Public/MAPPINGS/VENDORS/APPLE/GAELIC.TXT
+    "\xC4\xC5\xC7\xC9\xD1\xD6\xDC\xE1\xE0\xE2\xE4\xE3\xE5\xE7\xE9\xE8\xEA\xEB\xED\xEC\xEE\xEF\xF1\xF3\xF2\xF4\xF6\xF5\xFA\xF9\xFB\xFC\u2020\xB0\xA2\xA3\xA7\u2022\xB6\xDF\xAE\xA9\u2122\xB4\xA8\u2260\xC6\xD8\u1E02\xB1\u2264\u2265\u1E03\u010A\u010B\u1E0A\u1E0B\u1E1E\u1E1F\u0120\u0121\u1E40\xE6\xF8\u1E41\u1E56\u1E57\u027C\u0192\u017F\u1E60\xAB\xBB\u2026\xA0\xC0\xC3\xD5\u0152\u0153\u2013\u2014\u201C\u201D\u2018\u2019\u1E61\u1E9B\xFF\u0178\u1E6A\u20AC\u2039\u203A\u0176\u0177\u1E6B\xB7\u1EF2\u1EF3\u204A\xC2\xCA\xC1\xCB\xC8\xCD\xCE\xCF\xCC\xD3\xD4\u2663\xD2\xDA\xDB\xD9\u0131\xDD\xFD\u0174\u0175\u1E84\u1E85\u1E80\u1E81\u1E82\u1E83"
+  ),
+  "x-mac-greek": (
+    // Python: 'mac_greek'
+    "\xC4\xB9\xB2\xC9\xB3\xD6\xDC\u0385\xE0\xE2\xE4\u0384\xA8\xE7\xE9\xE8\xEA\xEB\xA3\u2122\xEE\xEF\u2022\xBD\u2030\xF4\xF6\xA6\u20AC\xF9\xFB\xFC\u2020\u0393\u0394\u0398\u039B\u039E\u03A0\xDF\xAE\xA9\u03A3\u03AA\xA7\u2260\xB0\xB7\u0391\xB1\u2264\u2265\xA5\u0392\u0395\u0396\u0397\u0399\u039A\u039C\u03A6\u03AB\u03A8\u03A9\u03AC\u039D\xAC\u039F\u03A1\u2248\u03A4\xAB\xBB\u2026\xA0\u03A5\u03A7\u0386\u0388\u0153\u2013\u2015\u201C\u201D\u2018\u2019\xF7\u0389\u038A\u038C\u038E\u03AD\u03AE\u03AF\u03CC\u038F\u03CD\u03B1\u03B2\u03C8\u03B4\u03B5\u03C6\u03B3\u03B7\u03B9\u03BE\u03BA\u03BB\u03BC\u03BD\u03BF\u03C0\u03CE\u03C1\u03C3\u03C4\u03B8\u03C9\u03C2\u03C7\u03C5\u03B6\u03CA\u03CB\u0390\u03B0\xAD"
+  ),
+  "x-mac-icelandic": (
+    // Python: 'mac_iceland'
+    "\xC4\xC5\xC7\xC9\xD1\xD6\xDC\xE1\xE0\xE2\xE4\xE3\xE5\xE7\xE9\xE8\xEA\xEB\xED\xEC\xEE\xEF\xF1\xF3\xF2\xF4\xF6\xF5\xFA\xF9\xFB\xFC\xDD\xB0\xA2\xA3\xA7\u2022\xB6\xDF\xAE\xA9\u2122\xB4\xA8\u2260\xC6\xD8\u221E\xB1\u2264\u2265\xA5\xB5\u2202\u2211\u220F\u03C0\u222B\xAA\xBA\u03A9\xE6\xF8\xBF\xA1\xAC\u221A\u0192\u2248\u2206\xAB\xBB\u2026\xA0\xC0\xC3\xD5\u0152\u0153\u2013\u2014\u201C\u201D\u2018\u2019\xF7\u25CA\xFF\u0178\u2044\u20AC\xD0\xF0\xDE\xFE\xFD\xB7\u201A\u201E\u2030\xC2\xCA\xC1\xCB\xC8\xCD\xCE\xCF\xCC\xD3\xD4\uF8FF\xD2\xDA\xDB\xD9\u0131\u02C6\u02DC\xAF\u02D8\u02D9\u02DA\xB8\u02DD\u02DB\u02C7"
+  ),
+  "x-mac-inuit": (
+    // http://unicode.org/Public/MAPPINGS/VENDORS/APPLE/INUIT.TXT
+    "\u1403\u1404\u1405\u1406\u140A\u140B\u1431\u1432\u1433\u1434\u1438\u1439\u1449\u144E\u144F\u1450\u1451\u1455\u1456\u1466\u146D\u146E\u146F\u1470\u1472\u1473\u1483\u148B\u148C\u148D\u148E\u1490\u1491\xB0\u14A1\u14A5\u14A6\u2022\xB6\u14A7\xAE\xA9\u2122\u14A8\u14AA\u14AB\u14BB\u14C2\u14C3\u14C4\u14C5\u14C7\u14C8\u14D0\u14EF\u14F0\u14F1\u14F2\u14F4\u14F5\u1505\u14D5\u14D6\u14D7\u14D8\u14DA\u14DB\u14EA\u1528\u1529\u152A\u152B\u152D\u2026\xA0\u152E\u153E\u1555\u1556\u1557\u2013\u2014\u201C\u201D\u2018\u2019\u1558\u1559\u155A\u155D\u1546\u1547\u1548\u1549\u154B\u154C\u1550\u157F\u1580\u1581\u1582\u1583\u1584\u1585\u158F\u1590\u1591\u1592\u1593\u1594\u1595\u1671\u1672\u1673\u1674\u1675\u1676\u1596\u15A0\u15A1\u15A2\u15A3\u15A4\u15A5\u15A6\u157C\u0141\u0142"
+  ),
+  "x-mac-ce": (
+    // Python: 'mac_latin2'
+    "\xC4\u0100\u0101\xC9\u0104\xD6\xDC\xE1\u0105\u010C\xE4\u010D\u0106\u0107\xE9\u0179\u017A\u010E\xED\u010F\u0112\u0113\u0116\xF3\u0117\xF4\xF6\xF5\xFA\u011A\u011B\xFC\u2020\xB0\u0118\xA3\xA7\u2022\xB6\xDF\xAE\xA9\u2122\u0119\xA8\u2260\u0123\u012E\u012F\u012A\u2264\u2265\u012B\u0136\u2202\u2211\u0142\u013B\u013C\u013D\u013E\u0139\u013A\u0145\u0146\u0143\xAC\u221A\u0144\u0147\u2206\xAB\xBB\u2026\xA0\u0148\u0150\xD5\u0151\u014C\u2013\u2014\u201C\u201D\u2018\u2019\xF7\u25CA\u014D\u0154\u0155\u0158\u2039\u203A\u0159\u0156\u0157\u0160\u201A\u201E\u0161\u015A\u015B\xC1\u0164\u0165\xCD\u017D\u017E\u016A\xD3\xD4\u016B\u016E\xDA\u016F\u0170\u0171\u0172\u0173\xDD\xFD\u0137\u017B\u0141\u017C\u0122\u02C7"
+  ),
+  macintosh: (
+    // Python: 'mac_roman'
+    "\xC4\xC5\xC7\xC9\xD1\xD6\xDC\xE1\xE0\xE2\xE4\xE3\xE5\xE7\xE9\xE8\xEA\xEB\xED\xEC\xEE\xEF\xF1\xF3\xF2\xF4\xF6\xF5\xFA\xF9\xFB\xFC\u2020\xB0\xA2\xA3\xA7\u2022\xB6\xDF\xAE\xA9\u2122\xB4\xA8\u2260\xC6\xD8\u221E\xB1\u2264\u2265\xA5\xB5\u2202\u2211\u220F\u03C0\u222B\xAA\xBA\u03A9\xE6\xF8\xBF\xA1\xAC\u221A\u0192\u2248\u2206\xAB\xBB\u2026\xA0\xC0\xC3\xD5\u0152\u0153\u2013\u2014\u201C\u201D\u2018\u2019\xF7\u25CA\xFF\u0178\u2044\u20AC\u2039\u203A\uFB01\uFB02\u2021\xB7\u201A\u201E\u2030\xC2\xCA\xC1\xCB\xC8\xCD\xCE\xCF\xCC\xD3\xD4\uF8FF\xD2\xDA\xDB\xD9\u0131\u02C6\u02DC\xAF\u02D8\u02D9\u02DA\xB8\u02DD\u02DB\u02C7"
+  ),
+  "x-mac-romanian": (
+    // Python: 'mac_romanian'
+    "\xC4\xC5\xC7\xC9\xD1\xD6\xDC\xE1\xE0\xE2\xE4\xE3\xE5\xE7\xE9\xE8\xEA\xEB\xED\xEC\xEE\xEF\xF1\xF3\xF2\xF4\xF6\xF5\xFA\xF9\xFB\xFC\u2020\xB0\xA2\xA3\xA7\u2022\xB6\xDF\xAE\xA9\u2122\xB4\xA8\u2260\u0102\u0218\u221E\xB1\u2264\u2265\xA5\xB5\u2202\u2211\u220F\u03C0\u222B\xAA\xBA\u03A9\u0103\u0219\xBF\xA1\xAC\u221A\u0192\u2248\u2206\xAB\xBB\u2026\xA0\xC0\xC3\xD5\u0152\u0153\u2013\u2014\u201C\u201D\u2018\u2019\xF7\u25CA\xFF\u0178\u2044\u20AC\u2039\u203A\u021A\u021B\u2021\xB7\u201A\u201E\u2030\xC2\xCA\xC1\xCB\xC8\xCD\xCE\xCF\xCC\xD3\xD4\uF8FF\xD2\xDA\xDB\xD9\u0131\u02C6\u02DC\xAF\u02D8\u02D9\u02DA\xB8\u02DD\u02DB\u02C7"
+  ),
+  "x-mac-turkish": (
+    // Python: 'mac_turkish'
+    "\xC4\xC5\xC7\xC9\xD1\xD6\xDC\xE1\xE0\xE2\xE4\xE3\xE5\xE7\xE9\xE8\xEA\xEB\xED\xEC\xEE\xEF\xF1\xF3\xF2\xF4\xF6\xF5\xFA\xF9\xFB\xFC\u2020\xB0\xA2\xA3\xA7\u2022\xB6\xDF\xAE\xA9\u2122\xB4\xA8\u2260\xC6\xD8\u221E\xB1\u2264\u2265\xA5\xB5\u2202\u2211\u220F\u03C0\u222B\xAA\xBA\u03A9\xE6\xF8\xBF\xA1\xAC\u221A\u0192\u2248\u2206\xAB\xBB\u2026\xA0\xC0\xC3\xD5\u0152\u0153\u2013\u2014\u201C\u201D\u2018\u2019\xF7\u25CA\xFF\u0178\u011E\u011F\u0130\u0131\u015E\u015F\u2021\xB7\u201A\u201E\u2030\xC2\xCA\xC1\xCB\xC8\xCD\xCE\xCF\xCC\xD3\xD4\uF8FF\xD2\xDA\xDB\xD9\uF8A0\u02C6\u02DC\xAF\u02D8\u02D9\u02DA\xB8\u02DD\u02DB\u02C7"
+  )
+};
+decode.MACSTRING = function(dataView, offset, dataLength, encoding) {
+  var table2 = eightBitMacEncodings[encoding];
+  if (table2 === void 0) {
+    return void 0;
+  }
+  var result = "";
+  for (var i = 0; i < dataLength; i++) {
+    var c = dataView.getUint8(offset + i);
+    if (c <= 127) {
+      result += String.fromCharCode(c);
+    } else {
+      result += table2[c & 127];
+    }
+  }
+  return result;
+};
+var macEncodingTableCache = typeof WeakMap === "function" && /* @__PURE__ */ new WeakMap();
+var macEncodingCacheKeys;
+var getMacEncodingTable = function(encoding) {
+  if (!macEncodingCacheKeys) {
+    macEncodingCacheKeys = {};
+    for (var e in eightBitMacEncodings) {
+      macEncodingCacheKeys[e] = new String(e);
+    }
+  }
+  var cacheKey = macEncodingCacheKeys[encoding];
+  if (cacheKey === void 0) {
+    return void 0;
+  }
+  if (macEncodingTableCache) {
+    var cachedTable = macEncodingTableCache.get(cacheKey);
+    if (cachedTable !== void 0) {
+      return cachedTable;
+    }
+  }
+  var decodingTable = eightBitMacEncodings[encoding];
+  if (decodingTable === void 0) {
+    return void 0;
+  }
+  var encodingTable = {};
+  for (var i = 0; i < decodingTable.length; i++) {
+    encodingTable[decodingTable.charCodeAt(i)] = i + 128;
+  }
+  if (macEncodingTableCache) {
+    macEncodingTableCache.set(cacheKey, encodingTable);
+  }
+  return encodingTable;
+};
+encode.MACSTRING = function(str, encoding) {
+  var table2 = getMacEncodingTable(encoding);
+  if (table2 === void 0) {
+    return void 0;
+  }
+  var result = [];
+  for (var i = 0; i < str.length; i++) {
+    var c = str.charCodeAt(i);
+    if (c >= 128) {
+      c = table2[c];
+      if (c === void 0) {
+        return void 0;
+      }
+    }
+    result[i] = c;
+  }
+  return result;
+};
+sizeOf.MACSTRING = function(str, encoding) {
+  var b = encode.MACSTRING(str, encoding);
+  if (b !== void 0) {
+    return b.length;
+  } else {
+    return 0;
+  }
+};
 function isByteEncodable(value) {
   return value >= -128 && value <= 127;
 }
@@ -327,6 +975,187 @@ function encodeVarDeltaRunAsWords(deltas, offset, result) {
   }
   return pos;
 }
+encode.VARDELTAS = function(deltas) {
+  var pos = 0;
+  var result = [];
+  while (pos < deltas.length) {
+    var value = deltas[pos];
+    if (value === 0) {
+      pos = encodeVarDeltaRunAsZeroes(deltas, pos, result);
+    } else if (value >= -128 && value <= 127) {
+      pos = encodeVarDeltaRunAsBytes(deltas, pos, result);
+    } else {
+      pos = encodeVarDeltaRunAsWords(deltas, pos, result);
+    }
+  }
+  return result;
+};
+encode.INDEX = function(l) {
+  var offset = 1;
+  var offsets = [offset];
+  var data = [];
+  for (var i = 0; i < l.length; i += 1) {
+    var v = encode.OBJECT(l[i]);
+    Array.prototype.push.apply(data, v);
+    offset += v.length;
+    offsets.push(offset);
+  }
+  if (data.length === 0) {
+    return [0, 0];
+  }
+  var encodedOffsets = [];
+  var offSize = 1 + Math.floor(Math.log(offset) / Math.log(2)) / 8 | 0;
+  var offsetEncoder = [void 0, encode.BYTE, encode.USHORT, encode.UINT24, encode.ULONG][offSize];
+  for (var i$1 = 0; i$1 < offsets.length; i$1 += 1) {
+    var encodedOffset = offsetEncoder(offsets[i$1]);
+    Array.prototype.push.apply(encodedOffsets, encodedOffset);
+  }
+  return Array.prototype.concat(
+    encode.Card16(l.length),
+    encode.OffSize(offSize),
+    encodedOffsets,
+    data
+  );
+};
+sizeOf.INDEX = function(v) {
+  return encode.INDEX(v).length;
+};
+encode.DICT = function(m) {
+  var d = [];
+  var keys = Object.keys(m);
+  var length = keys.length;
+  for (var i = 0; i < length; i += 1) {
+    var k = parseInt(keys[i], 0);
+    var v = m[k];
+    d = d.concat(encode.OPERAND(v.value, v.type));
+    d = d.concat(encode.OPERATOR(k));
+  }
+  return d;
+};
+sizeOf.DICT = function(m) {
+  return encode.DICT(m).length;
+};
+encode.OPERATOR = function(v) {
+  if (v < 1200) {
+    return [v];
+  } else {
+    return [12, v - 1200];
+  }
+};
+encode.OPERAND = function(v, type) {
+  var d = [];
+  if (Array.isArray(type)) {
+    for (var i = 0; i < type.length; i += 1) {
+      check.argument(v.length === type.length, "Not enough arguments given for type" + type);
+      d = d.concat(encode.OPERAND(v[i], type[i]));
+    }
+  } else {
+    if (type === "SID") {
+      d = d.concat(encode.NUMBER(v));
+    } else if (type === "offset") {
+      d = d.concat(encode.NUMBER32(v));
+    } else if (type === "number") {
+      d = d.concat(encode.NUMBER(v));
+    } else if (type === "real") {
+      d = d.concat(encode.REAL(v));
+    } else {
+      throw new Error("Unknown operand type " + type);
+    }
+  }
+  return d;
+};
+encode.OP = encode.BYTE;
+sizeOf.OP = sizeOf.BYTE;
+var wmm = typeof WeakMap === "function" && /* @__PURE__ */ new WeakMap();
+encode.CHARSTRING = function(ops) {
+  if (wmm) {
+    var cachedValue = wmm.get(ops);
+    if (cachedValue !== void 0) {
+      return cachedValue;
+    }
+  }
+  var d = [];
+  var length = ops.length;
+  for (var i = 0; i < length; i += 1) {
+    var op = ops[i];
+    d = d.concat(encode[op.type](op.value));
+  }
+  if (wmm) {
+    wmm.set(ops, d);
+  }
+  return d;
+};
+sizeOf.CHARSTRING = function(ops) {
+  return encode.CHARSTRING(ops).length;
+};
+encode.OBJECT = function(v) {
+  var encodingFunction = encode[v.type];
+  check.argument(encodingFunction !== void 0, "No encoding function for type " + v.type);
+  return encodingFunction(v.value);
+};
+sizeOf.OBJECT = function(v) {
+  var sizeOfFunction = sizeOf[v.type];
+  check.argument(sizeOfFunction !== void 0, "No sizeOf function for type " + v.type);
+  return sizeOfFunction(v.value);
+};
+encode.TABLE = function(table2) {
+  var d = [];
+  var length = table2.fields.length;
+  var subtables = [];
+  var subtableOffsets = [];
+  for (var i = 0; i < length; i += 1) {
+    var field = table2.fields[i];
+    var encodingFunction = encode[field.type];
+    check.argument(encodingFunction !== void 0, "No encoding function for field type " + field.type + " (" + field.name + ")");
+    var value = table2[field.name];
+    if (value === void 0) {
+      value = field.value;
+    }
+    var bytes = encodingFunction(value);
+    if (field.type === "TABLE") {
+      subtableOffsets.push(d.length);
+      d = d.concat([0, 0]);
+      subtables.push(bytes);
+    } else {
+      d = d.concat(bytes);
+    }
+  }
+  for (var i$1 = 0; i$1 < subtables.length; i$1 += 1) {
+    var o = subtableOffsets[i$1];
+    var offset = d.length;
+    check.argument(offset < 65536, "Table " + table2.tableName + " too big.");
+    d[o] = offset >> 8;
+    d[o + 1] = offset & 255;
+    d = d.concat(subtables[i$1]);
+  }
+  return d;
+};
+sizeOf.TABLE = function(table2) {
+  var numBytes = 0;
+  var length = table2.fields.length;
+  for (var i = 0; i < length; i += 1) {
+    var field = table2.fields[i];
+    var sizeOfFunction = sizeOf[field.type];
+    check.argument(sizeOfFunction !== void 0, "No sizeOf function for field type " + field.type + " (" + field.name + ")");
+    var value = table2[field.name];
+    if (value === void 0) {
+      value = field.value;
+    }
+    numBytes += sizeOfFunction(value);
+    if (field.type === "TABLE") {
+      numBytes += 2;
+    }
+  }
+  return numBytes;
+};
+encode.RECORD = encode.TABLE;
+sizeOf.RECORD = sizeOf.TABLE;
+encode.LITERAL = function(v) {
+  return v;
+};
+sizeOf.LITERAL = function(v) {
+  return v.length;
+};
 function Table(tableName, fields, options) {
   if (fields.length && (fields[0].name !== "coverageFormat" || fields[0].value === 1)) {
     for (var i = 0; i < fields.length; i += 1) {
@@ -347,6 +1176,12 @@ function Table(tableName, fields, options) {
     }
   }
 }
+Table.prototype.encode = function() {
+  return encode.TABLE(this);
+};
+Table.prototype.sizeOf = function() {
+  return sizeOf.TABLE(this);
+};
 function ushortList(itemName, list, count) {
   if (count === void 0) {
     count = list.length;
@@ -399,6 +1234,8 @@ function Coverage(coverageTable) {
     check.assert(false, "Coverage format must be 1 or 2.");
   }
 }
+Coverage.prototype = Object.create(Table.prototype);
+Coverage.prototype.constructor = Coverage;
 function ScriptList(scriptListTable) {
   Table.call(
     this,
@@ -428,6 +1265,8 @@ function ScriptList(scriptListTable) {
     })
   );
 }
+ScriptList.prototype = Object.create(Table.prototype);
+ScriptList.prototype.constructor = ScriptList;
 function FeatureList(featureListTable) {
   Table.call(
     this,
@@ -443,6 +1282,8 @@ function FeatureList(featureListTable) {
     })
   );
 }
+FeatureList.prototype = Object.create(Table.prototype);
+FeatureList.prototype.constructor = FeatureList;
 function LookupList(lookupListTable, subtableMakers2) {
   Table.call(this, "lookupListTable", tableList("lookup", lookupListTable, function(lookupTable) {
     var subtableCallback = subtableMakers2[lookupTable.lookupType];
@@ -453,6 +1294,19 @@ function LookupList(lookupListTable, subtableMakers2) {
     ].concat(tableList("subtable", lookupTable.subtables, subtableCallback)));
   }));
 }
+LookupList.prototype = Object.create(Table.prototype);
+LookupList.prototype.constructor = LookupList;
+var table = {
+  Table,
+  Record: Table,
+  Coverage,
+  ScriptList,
+  FeatureList,
+  LookupList,
+  ushortList,
+  tableList,
+  recordList
+};
 function getByte(dataView, offset) {
   return dataView.getUint8(offset);
 }
@@ -499,11 +1353,454 @@ function bytesToString(bytes) {
   }
   return s;
 }
+var typeOffsets = {
+  byte: 1,
+  uShort: 2,
+  short: 2,
+  uLong: 4,
+  fixed: 4,
+  longDateTime: 8,
+  tag: 4
+};
 function Parser(data, offset) {
   this.data = data;
   this.offset = offset;
   this.relativeOffset = 0;
 }
+Parser.prototype.parseByte = function() {
+  var v = this.data.getUint8(this.offset + this.relativeOffset);
+  this.relativeOffset += 1;
+  return v;
+};
+Parser.prototype.parseChar = function() {
+  var v = this.data.getInt8(this.offset + this.relativeOffset);
+  this.relativeOffset += 1;
+  return v;
+};
+Parser.prototype.parseCard8 = Parser.prototype.parseByte;
+Parser.prototype.parseUShort = function() {
+  var v = this.data.getUint16(this.offset + this.relativeOffset);
+  this.relativeOffset += 2;
+  return v;
+};
+Parser.prototype.parseCard16 = Parser.prototype.parseUShort;
+Parser.prototype.parseSID = Parser.prototype.parseUShort;
+Parser.prototype.parseOffset16 = Parser.prototype.parseUShort;
+Parser.prototype.parseShort = function() {
+  var v = this.data.getInt16(this.offset + this.relativeOffset);
+  this.relativeOffset += 2;
+  return v;
+};
+Parser.prototype.parseF2Dot14 = function() {
+  var v = this.data.getInt16(this.offset + this.relativeOffset) / 16384;
+  this.relativeOffset += 2;
+  return v;
+};
+Parser.prototype.parseULong = function() {
+  var v = getULong(this.data, this.offset + this.relativeOffset);
+  this.relativeOffset += 4;
+  return v;
+};
+Parser.prototype.parseOffset32 = Parser.prototype.parseULong;
+Parser.prototype.parseFixed = function() {
+  var v = getFixed(this.data, this.offset + this.relativeOffset);
+  this.relativeOffset += 4;
+  return v;
+};
+Parser.prototype.parseString = function(length) {
+  var dataView = this.data;
+  var offset = this.offset + this.relativeOffset;
+  var string = "";
+  this.relativeOffset += length;
+  for (var i = 0; i < length; i++) {
+    string += String.fromCharCode(dataView.getUint8(offset + i));
+  }
+  return string;
+};
+Parser.prototype.parseTag = function() {
+  return this.parseString(4);
+};
+Parser.prototype.parseLongDateTime = function() {
+  var v = getULong(this.data, this.offset + this.relativeOffset + 4);
+  v -= 2082844800;
+  this.relativeOffset += 8;
+  return v;
+};
+Parser.prototype.parseVersion = function(minorBase) {
+  var major = getUShort(this.data, this.offset + this.relativeOffset);
+  var minor = getUShort(this.data, this.offset + this.relativeOffset + 2);
+  this.relativeOffset += 4;
+  if (minorBase === void 0) {
+    minorBase = 4096;
+  }
+  return major + minor / minorBase / 10;
+};
+Parser.prototype.skip = function(type, amount) {
+  if (amount === void 0) {
+    amount = 1;
+  }
+  this.relativeOffset += typeOffsets[type] * amount;
+};
+Parser.prototype.parseULongList = function(count) {
+  if (count === void 0) {
+    count = this.parseULong();
+  }
+  var offsets = new Array(count);
+  var dataView = this.data;
+  var offset = this.offset + this.relativeOffset;
+  for (var i = 0; i < count; i++) {
+    offsets[i] = dataView.getUint32(offset);
+    offset += 4;
+  }
+  this.relativeOffset += count * 4;
+  return offsets;
+};
+Parser.prototype.parseOffset16List = Parser.prototype.parseUShortList = function(count) {
+  if (count === void 0) {
+    count = this.parseUShort();
+  }
+  var offsets = new Array(count);
+  var dataView = this.data;
+  var offset = this.offset + this.relativeOffset;
+  for (var i = 0; i < count; i++) {
+    offsets[i] = dataView.getUint16(offset);
+    offset += 2;
+  }
+  this.relativeOffset += count * 2;
+  return offsets;
+};
+Parser.prototype.parseShortList = function(count) {
+  var list = new Array(count);
+  var dataView = this.data;
+  var offset = this.offset + this.relativeOffset;
+  for (var i = 0; i < count; i++) {
+    list[i] = dataView.getInt16(offset);
+    offset += 2;
+  }
+  this.relativeOffset += count * 2;
+  return list;
+};
+Parser.prototype.parseByteList = function(count) {
+  var list = new Array(count);
+  var dataView = this.data;
+  var offset = this.offset + this.relativeOffset;
+  for (var i = 0; i < count; i++) {
+    list[i] = dataView.getUint8(offset++);
+  }
+  this.relativeOffset += count;
+  return list;
+};
+Parser.prototype.parseList = function(count, itemCallback) {
+  if (!itemCallback) {
+    itemCallback = count;
+    count = this.parseUShort();
+  }
+  var list = new Array(count);
+  for (var i = 0; i < count; i++) {
+    list[i] = itemCallback.call(this);
+  }
+  return list;
+};
+Parser.prototype.parseList32 = function(count, itemCallback) {
+  if (!itemCallback) {
+    itemCallback = count;
+    count = this.parseULong();
+  }
+  var list = new Array(count);
+  for (var i = 0; i < count; i++) {
+    list[i] = itemCallback.call(this);
+  }
+  return list;
+};
+Parser.prototype.parseRecordList = function(count, recordDescription) {
+  if (!recordDescription) {
+    recordDescription = count;
+    count = this.parseUShort();
+  }
+  var records = new Array(count);
+  var fields = Object.keys(recordDescription);
+  for (var i = 0; i < count; i++) {
+    var rec = {};
+    for (var j = 0; j < fields.length; j++) {
+      var fieldName = fields[j];
+      var fieldType = recordDescription[fieldName];
+      rec[fieldName] = fieldType.call(this);
+    }
+    records[i] = rec;
+  }
+  return records;
+};
+Parser.prototype.parseRecordList32 = function(count, recordDescription) {
+  if (!recordDescription) {
+    recordDescription = count;
+    count = this.parseULong();
+  }
+  var records = new Array(count);
+  var fields = Object.keys(recordDescription);
+  for (var i = 0; i < count; i++) {
+    var rec = {};
+    for (var j = 0; j < fields.length; j++) {
+      var fieldName = fields[j];
+      var fieldType = recordDescription[fieldName];
+      rec[fieldName] = fieldType.call(this);
+    }
+    records[i] = rec;
+  }
+  return records;
+};
+Parser.prototype.parseStruct = function(description) {
+  if (typeof description === "function") {
+    return description.call(this);
+  } else {
+    var fields = Object.keys(description);
+    var struct = {};
+    for (var j = 0; j < fields.length; j++) {
+      var fieldName = fields[j];
+      var fieldType = description[fieldName];
+      struct[fieldName] = fieldType.call(this);
+    }
+    return struct;
+  }
+};
+Parser.prototype.parseValueRecord = function(valueFormat) {
+  if (valueFormat === void 0) {
+    valueFormat = this.parseUShort();
+  }
+  if (valueFormat === 0) {
+    return;
+  }
+  var valueRecord = {};
+  if (valueFormat & 1) {
+    valueRecord.xPlacement = this.parseShort();
+  }
+  if (valueFormat & 2) {
+    valueRecord.yPlacement = this.parseShort();
+  }
+  if (valueFormat & 4) {
+    valueRecord.xAdvance = this.parseShort();
+  }
+  if (valueFormat & 8) {
+    valueRecord.yAdvance = this.parseShort();
+  }
+  if (valueFormat & 16) {
+    valueRecord.xPlaDevice = void 0;
+    this.parseShort();
+  }
+  if (valueFormat & 32) {
+    valueRecord.yPlaDevice = void 0;
+    this.parseShort();
+  }
+  if (valueFormat & 64) {
+    valueRecord.xAdvDevice = void 0;
+    this.parseShort();
+  }
+  if (valueFormat & 128) {
+    valueRecord.yAdvDevice = void 0;
+    this.parseShort();
+  }
+  return valueRecord;
+};
+Parser.prototype.parseValueRecordList = function() {
+  var valueFormat = this.parseUShort();
+  var valueCount = this.parseUShort();
+  var values = new Array(valueCount);
+  for (var i = 0; i < valueCount; i++) {
+    values[i] = this.parseValueRecord(valueFormat);
+  }
+  return values;
+};
+Parser.prototype.parsePointer = function(description) {
+  var structOffset = this.parseOffset16();
+  if (structOffset > 0) {
+    return new Parser(this.data, this.offset + structOffset).parseStruct(description);
+  }
+  return void 0;
+};
+Parser.prototype.parsePointer32 = function(description) {
+  var structOffset = this.parseOffset32();
+  if (structOffset > 0) {
+    return new Parser(this.data, this.offset + structOffset).parseStruct(description);
+  }
+  return void 0;
+};
+Parser.prototype.parseListOfLists = function(itemCallback) {
+  var offsets = this.parseOffset16List();
+  var count = offsets.length;
+  var relativeOffset = this.relativeOffset;
+  var list = new Array(count);
+  for (var i = 0; i < count; i++) {
+    var start = offsets[i];
+    if (start === 0) {
+      list[i] = void 0;
+      continue;
+    }
+    this.relativeOffset = start;
+    if (itemCallback) {
+      var subOffsets = this.parseOffset16List();
+      var subList = new Array(subOffsets.length);
+      for (var j = 0; j < subOffsets.length; j++) {
+        this.relativeOffset = start + subOffsets[j];
+        subList[j] = itemCallback.call(this);
+      }
+      list[i] = subList;
+    } else {
+      list[i] = this.parseUShortList();
+    }
+  }
+  this.relativeOffset = relativeOffset;
+  return list;
+};
+Parser.prototype.parseCoverage = function() {
+  var startOffset = this.offset + this.relativeOffset;
+  var format = this.parseUShort();
+  var count = this.parseUShort();
+  if (format === 1) {
+    return {
+      format: 1,
+      glyphs: this.parseUShortList(count)
+    };
+  } else if (format === 2) {
+    var ranges = new Array(count);
+    for (var i = 0; i < count; i++) {
+      ranges[i] = {
+        start: this.parseUShort(),
+        end: this.parseUShort(),
+        index: this.parseUShort()
+      };
+    }
+    return {
+      format: 2,
+      ranges
+    };
+  }
+  throw new Error("0x" + startOffset.toString(16) + ": Coverage format must be 1 or 2.");
+};
+Parser.prototype.parseClassDef = function() {
+  var startOffset = this.offset + this.relativeOffset;
+  var format = this.parseUShort();
+  if (format === 1) {
+    return {
+      format: 1,
+      startGlyph: this.parseUShort(),
+      classes: this.parseUShortList()
+    };
+  } else if (format === 2) {
+    return {
+      format: 2,
+      ranges: this.parseRecordList({
+        start: Parser.uShort,
+        end: Parser.uShort,
+        classId: Parser.uShort
+      })
+    };
+  }
+  throw new Error("0x" + startOffset.toString(16) + ": ClassDef format must be 1 or 2.");
+};
+Parser.list = function(count, itemCallback) {
+  return function() {
+    return this.parseList(count, itemCallback);
+  };
+};
+Parser.list32 = function(count, itemCallback) {
+  return function() {
+    return this.parseList32(count, itemCallback);
+  };
+};
+Parser.recordList = function(count, recordDescription) {
+  return function() {
+    return this.parseRecordList(count, recordDescription);
+  };
+};
+Parser.recordList32 = function(count, recordDescription) {
+  return function() {
+    return this.parseRecordList32(count, recordDescription);
+  };
+};
+Parser.pointer = function(description) {
+  return function() {
+    return this.parsePointer(description);
+  };
+};
+Parser.pointer32 = function(description) {
+  return function() {
+    return this.parsePointer32(description);
+  };
+};
+Parser.tag = Parser.prototype.parseTag;
+Parser.byte = Parser.prototype.parseByte;
+Parser.uShort = Parser.offset16 = Parser.prototype.parseUShort;
+Parser.uShortList = Parser.prototype.parseUShortList;
+Parser.uLong = Parser.offset32 = Parser.prototype.parseULong;
+Parser.uLongList = Parser.prototype.parseULongList;
+Parser.struct = Parser.prototype.parseStruct;
+Parser.coverage = Parser.prototype.parseCoverage;
+Parser.classDef = Parser.prototype.parseClassDef;
+var langSysTable = {
+  reserved: Parser.uShort,
+  reqFeatureIndex: Parser.uShort,
+  featureIndexes: Parser.uShortList
+};
+Parser.prototype.parseScriptList = function() {
+  return this.parsePointer(Parser.recordList({
+    tag: Parser.tag,
+    script: Parser.pointer({
+      defaultLangSys: Parser.pointer(langSysTable),
+      langSysRecords: Parser.recordList({
+        tag: Parser.tag,
+        langSys: Parser.pointer(langSysTable)
+      })
+    })
+  })) || [];
+};
+Parser.prototype.parseFeatureList = function() {
+  return this.parsePointer(Parser.recordList({
+    tag: Parser.tag,
+    feature: Parser.pointer({
+      featureParams: Parser.offset16,
+      lookupListIndexes: Parser.uShortList
+    })
+  })) || [];
+};
+Parser.prototype.parseLookupList = function(lookupTableParsers) {
+  return this.parsePointer(Parser.list(Parser.pointer(function() {
+    var lookupType = this.parseUShort();
+    check.argument(1 <= lookupType && lookupType <= 9, "GPOS/GSUB lookup type " + lookupType + " unknown.");
+    var lookupFlag = this.parseUShort();
+    var useMarkFilteringSet = lookupFlag & 16;
+    return {
+      lookupType,
+      lookupFlag,
+      subtables: this.parseList(Parser.pointer(lookupTableParsers[lookupType])),
+      markFilteringSet: useMarkFilteringSet ? this.parseUShort() : void 0
+    };
+  }))) || [];
+};
+Parser.prototype.parseFeatureVariationsList = function() {
+  return this.parsePointer32(function() {
+    var majorVersion = this.parseUShort();
+    var minorVersion = this.parseUShort();
+    check.argument(majorVersion === 1 && minorVersion < 1, "GPOS/GSUB feature variations table unknown.");
+    var featureVariations = this.parseRecordList32({
+      conditionSetOffset: Parser.offset32,
+      featureTableSubstitutionOffset: Parser.offset32
+    });
+    return featureVariations;
+  }) || [];
+};
+var parse = {
+  getByte,
+  getCard8: getByte,
+  getUShort,
+  getCard16: getUShort,
+  getShort,
+  getULong,
+  getFixed,
+  getTag,
+  getOffset,
+  getBytes,
+  bytesToString,
+  Parser
+};
 function parseCmapTableFormat12(cmap2, p) {
   p.parseUShort();
   cmap2.length = p.parseULong();
@@ -705,16 +2002,1204 @@ function makeCmapTable(glyphs) {
   }
   return t;
 }
+var cmap = { parse: parseCmapTable, make: makeCmapTable };
+var cffStandardStrings = [
+  ".notdef",
+  "space",
+  "exclam",
+  "quotedbl",
+  "numbersign",
+  "dollar",
+  "percent",
+  "ampersand",
+  "quoteright",
+  "parenleft",
+  "parenright",
+  "asterisk",
+  "plus",
+  "comma",
+  "hyphen",
+  "period",
+  "slash",
+  "zero",
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "colon",
+  "semicolon",
+  "less",
+  "equal",
+  "greater",
+  "question",
+  "at",
+  "A",
+  "B",
+  "C",
+  "D",
+  "E",
+  "F",
+  "G",
+  "H",
+  "I",
+  "J",
+  "K",
+  "L",
+  "M",
+  "N",
+  "O",
+  "P",
+  "Q",
+  "R",
+  "S",
+  "T",
+  "U",
+  "V",
+  "W",
+  "X",
+  "Y",
+  "Z",
+  "bracketleft",
+  "backslash",
+  "bracketright",
+  "asciicircum",
+  "underscore",
+  "quoteleft",
+  "a",
+  "b",
+  "c",
+  "d",
+  "e",
+  "f",
+  "g",
+  "h",
+  "i",
+  "j",
+  "k",
+  "l",
+  "m",
+  "n",
+  "o",
+  "p",
+  "q",
+  "r",
+  "s",
+  "t",
+  "u",
+  "v",
+  "w",
+  "x",
+  "y",
+  "z",
+  "braceleft",
+  "bar",
+  "braceright",
+  "asciitilde",
+  "exclamdown",
+  "cent",
+  "sterling",
+  "fraction",
+  "yen",
+  "florin",
+  "section",
+  "currency",
+  "quotesingle",
+  "quotedblleft",
+  "guillemotleft",
+  "guilsinglleft",
+  "guilsinglright",
+  "fi",
+  "fl",
+  "endash",
+  "dagger",
+  "daggerdbl",
+  "periodcentered",
+  "paragraph",
+  "bullet",
+  "quotesinglbase",
+  "quotedblbase",
+  "quotedblright",
+  "guillemotright",
+  "ellipsis",
+  "perthousand",
+  "questiondown",
+  "grave",
+  "acute",
+  "circumflex",
+  "tilde",
+  "macron",
+  "breve",
+  "dotaccent",
+  "dieresis",
+  "ring",
+  "cedilla",
+  "hungarumlaut",
+  "ogonek",
+  "caron",
+  "emdash",
+  "AE",
+  "ordfeminine",
+  "Lslash",
+  "Oslash",
+  "OE",
+  "ordmasculine",
+  "ae",
+  "dotlessi",
+  "lslash",
+  "oslash",
+  "oe",
+  "germandbls",
+  "onesuperior",
+  "logicalnot",
+  "mu",
+  "trademark",
+  "Eth",
+  "onehalf",
+  "plusminus",
+  "Thorn",
+  "onequarter",
+  "divide",
+  "brokenbar",
+  "degree",
+  "thorn",
+  "threequarters",
+  "twosuperior",
+  "registered",
+  "minus",
+  "eth",
+  "multiply",
+  "threesuperior",
+  "copyright",
+  "Aacute",
+  "Acircumflex",
+  "Adieresis",
+  "Agrave",
+  "Aring",
+  "Atilde",
+  "Ccedilla",
+  "Eacute",
+  "Ecircumflex",
+  "Edieresis",
+  "Egrave",
+  "Iacute",
+  "Icircumflex",
+  "Idieresis",
+  "Igrave",
+  "Ntilde",
+  "Oacute",
+  "Ocircumflex",
+  "Odieresis",
+  "Ograve",
+  "Otilde",
+  "Scaron",
+  "Uacute",
+  "Ucircumflex",
+  "Udieresis",
+  "Ugrave",
+  "Yacute",
+  "Ydieresis",
+  "Zcaron",
+  "aacute",
+  "acircumflex",
+  "adieresis",
+  "agrave",
+  "aring",
+  "atilde",
+  "ccedilla",
+  "eacute",
+  "ecircumflex",
+  "edieresis",
+  "egrave",
+  "iacute",
+  "icircumflex",
+  "idieresis",
+  "igrave",
+  "ntilde",
+  "oacute",
+  "ocircumflex",
+  "odieresis",
+  "ograve",
+  "otilde",
+  "scaron",
+  "uacute",
+  "ucircumflex",
+  "udieresis",
+  "ugrave",
+  "yacute",
+  "ydieresis",
+  "zcaron",
+  "exclamsmall",
+  "Hungarumlautsmall",
+  "dollaroldstyle",
+  "dollarsuperior",
+  "ampersandsmall",
+  "Acutesmall",
+  "parenleftsuperior",
+  "parenrightsuperior",
+  "266 ff",
+  "onedotenleader",
+  "zerooldstyle",
+  "oneoldstyle",
+  "twooldstyle",
+  "threeoldstyle",
+  "fouroldstyle",
+  "fiveoldstyle",
+  "sixoldstyle",
+  "sevenoldstyle",
+  "eightoldstyle",
+  "nineoldstyle",
+  "commasuperior",
+  "threequartersemdash",
+  "periodsuperior",
+  "questionsmall",
+  "asuperior",
+  "bsuperior",
+  "centsuperior",
+  "dsuperior",
+  "esuperior",
+  "isuperior",
+  "lsuperior",
+  "msuperior",
+  "nsuperior",
+  "osuperior",
+  "rsuperior",
+  "ssuperior",
+  "tsuperior",
+  "ff",
+  "ffi",
+  "ffl",
+  "parenleftinferior",
+  "parenrightinferior",
+  "Circumflexsmall",
+  "hyphensuperior",
+  "Gravesmall",
+  "Asmall",
+  "Bsmall",
+  "Csmall",
+  "Dsmall",
+  "Esmall",
+  "Fsmall",
+  "Gsmall",
+  "Hsmall",
+  "Ismall",
+  "Jsmall",
+  "Ksmall",
+  "Lsmall",
+  "Msmall",
+  "Nsmall",
+  "Osmall",
+  "Psmall",
+  "Qsmall",
+  "Rsmall",
+  "Ssmall",
+  "Tsmall",
+  "Usmall",
+  "Vsmall",
+  "Wsmall",
+  "Xsmall",
+  "Ysmall",
+  "Zsmall",
+  "colonmonetary",
+  "onefitted",
+  "rupiah",
+  "Tildesmall",
+  "exclamdownsmall",
+  "centoldstyle",
+  "Lslashsmall",
+  "Scaronsmall",
+  "Zcaronsmall",
+  "Dieresissmall",
+  "Brevesmall",
+  "Caronsmall",
+  "Dotaccentsmall",
+  "Macronsmall",
+  "figuredash",
+  "hypheninferior",
+  "Ogoneksmall",
+  "Ringsmall",
+  "Cedillasmall",
+  "questiondownsmall",
+  "oneeighth",
+  "threeeighths",
+  "fiveeighths",
+  "seveneighths",
+  "onethird",
+  "twothirds",
+  "zerosuperior",
+  "foursuperior",
+  "fivesuperior",
+  "sixsuperior",
+  "sevensuperior",
+  "eightsuperior",
+  "ninesuperior",
+  "zeroinferior",
+  "oneinferior",
+  "twoinferior",
+  "threeinferior",
+  "fourinferior",
+  "fiveinferior",
+  "sixinferior",
+  "seveninferior",
+  "eightinferior",
+  "nineinferior",
+  "centinferior",
+  "dollarinferior",
+  "periodinferior",
+  "commainferior",
+  "Agravesmall",
+  "Aacutesmall",
+  "Acircumflexsmall",
+  "Atildesmall",
+  "Adieresissmall",
+  "Aringsmall",
+  "AEsmall",
+  "Ccedillasmall",
+  "Egravesmall",
+  "Eacutesmall",
+  "Ecircumflexsmall",
+  "Edieresissmall",
+  "Igravesmall",
+  "Iacutesmall",
+  "Icircumflexsmall",
+  "Idieresissmall",
+  "Ethsmall",
+  "Ntildesmall",
+  "Ogravesmall",
+  "Oacutesmall",
+  "Ocircumflexsmall",
+  "Otildesmall",
+  "Odieresissmall",
+  "OEsmall",
+  "Oslashsmall",
+  "Ugravesmall",
+  "Uacutesmall",
+  "Ucircumflexsmall",
+  "Udieresissmall",
+  "Yacutesmall",
+  "Thornsmall",
+  "Ydieresissmall",
+  "001.000",
+  "001.001",
+  "001.002",
+  "001.003",
+  "Black",
+  "Bold",
+  "Book",
+  "Light",
+  "Medium",
+  "Regular",
+  "Roman",
+  "Semibold"
+];
+var cffStandardEncoding = [
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "space",
+  "exclam",
+  "quotedbl",
+  "numbersign",
+  "dollar",
+  "percent",
+  "ampersand",
+  "quoteright",
+  "parenleft",
+  "parenright",
+  "asterisk",
+  "plus",
+  "comma",
+  "hyphen",
+  "period",
+  "slash",
+  "zero",
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "colon",
+  "semicolon",
+  "less",
+  "equal",
+  "greater",
+  "question",
+  "at",
+  "A",
+  "B",
+  "C",
+  "D",
+  "E",
+  "F",
+  "G",
+  "H",
+  "I",
+  "J",
+  "K",
+  "L",
+  "M",
+  "N",
+  "O",
+  "P",
+  "Q",
+  "R",
+  "S",
+  "T",
+  "U",
+  "V",
+  "W",
+  "X",
+  "Y",
+  "Z",
+  "bracketleft",
+  "backslash",
+  "bracketright",
+  "asciicircum",
+  "underscore",
+  "quoteleft",
+  "a",
+  "b",
+  "c",
+  "d",
+  "e",
+  "f",
+  "g",
+  "h",
+  "i",
+  "j",
+  "k",
+  "l",
+  "m",
+  "n",
+  "o",
+  "p",
+  "q",
+  "r",
+  "s",
+  "t",
+  "u",
+  "v",
+  "w",
+  "x",
+  "y",
+  "z",
+  "braceleft",
+  "bar",
+  "braceright",
+  "asciitilde",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "exclamdown",
+  "cent",
+  "sterling",
+  "fraction",
+  "yen",
+  "florin",
+  "section",
+  "currency",
+  "quotesingle",
+  "quotedblleft",
+  "guillemotleft",
+  "guilsinglleft",
+  "guilsinglright",
+  "fi",
+  "fl",
+  "",
+  "endash",
+  "dagger",
+  "daggerdbl",
+  "periodcentered",
+  "",
+  "paragraph",
+  "bullet",
+  "quotesinglbase",
+  "quotedblbase",
+  "quotedblright",
+  "guillemotright",
+  "ellipsis",
+  "perthousand",
+  "",
+  "questiondown",
+  "",
+  "grave",
+  "acute",
+  "circumflex",
+  "tilde",
+  "macron",
+  "breve",
+  "dotaccent",
+  "dieresis",
+  "",
+  "ring",
+  "cedilla",
+  "",
+  "hungarumlaut",
+  "ogonek",
+  "caron",
+  "emdash",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "AE",
+  "",
+  "ordfeminine",
+  "",
+  "",
+  "",
+  "",
+  "Lslash",
+  "Oslash",
+  "OE",
+  "ordmasculine",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "ae",
+  "",
+  "",
+  "",
+  "dotlessi",
+  "",
+  "",
+  "lslash",
+  "oslash",
+  "oe",
+  "germandbls"
+];
+var cffExpertEncoding = [
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "space",
+  "exclamsmall",
+  "Hungarumlautsmall",
+  "",
+  "dollaroldstyle",
+  "dollarsuperior",
+  "ampersandsmall",
+  "Acutesmall",
+  "parenleftsuperior",
+  "parenrightsuperior",
+  "twodotenleader",
+  "onedotenleader",
+  "comma",
+  "hyphen",
+  "period",
+  "fraction",
+  "zerooldstyle",
+  "oneoldstyle",
+  "twooldstyle",
+  "threeoldstyle",
+  "fouroldstyle",
+  "fiveoldstyle",
+  "sixoldstyle",
+  "sevenoldstyle",
+  "eightoldstyle",
+  "nineoldstyle",
+  "colon",
+  "semicolon",
+  "commasuperior",
+  "threequartersemdash",
+  "periodsuperior",
+  "questionsmall",
+  "",
+  "asuperior",
+  "bsuperior",
+  "centsuperior",
+  "dsuperior",
+  "esuperior",
+  "",
+  "",
+  "isuperior",
+  "",
+  "",
+  "lsuperior",
+  "msuperior",
+  "nsuperior",
+  "osuperior",
+  "",
+  "",
+  "rsuperior",
+  "ssuperior",
+  "tsuperior",
+  "",
+  "ff",
+  "fi",
+  "fl",
+  "ffi",
+  "ffl",
+  "parenleftinferior",
+  "",
+  "parenrightinferior",
+  "Circumflexsmall",
+  "hyphensuperior",
+  "Gravesmall",
+  "Asmall",
+  "Bsmall",
+  "Csmall",
+  "Dsmall",
+  "Esmall",
+  "Fsmall",
+  "Gsmall",
+  "Hsmall",
+  "Ismall",
+  "Jsmall",
+  "Ksmall",
+  "Lsmall",
+  "Msmall",
+  "Nsmall",
+  "Osmall",
+  "Psmall",
+  "Qsmall",
+  "Rsmall",
+  "Ssmall",
+  "Tsmall",
+  "Usmall",
+  "Vsmall",
+  "Wsmall",
+  "Xsmall",
+  "Ysmall",
+  "Zsmall",
+  "colonmonetary",
+  "onefitted",
+  "rupiah",
+  "Tildesmall",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "exclamdownsmall",
+  "centoldstyle",
+  "Lslashsmall",
+  "",
+  "",
+  "Scaronsmall",
+  "Zcaronsmall",
+  "Dieresissmall",
+  "Brevesmall",
+  "Caronsmall",
+  "",
+  "Dotaccentsmall",
+  "",
+  "",
+  "Macronsmall",
+  "",
+  "",
+  "figuredash",
+  "hypheninferior",
+  "",
+  "",
+  "Ogoneksmall",
+  "Ringsmall",
+  "Cedillasmall",
+  "",
+  "",
+  "",
+  "onequarter",
+  "onehalf",
+  "threequarters",
+  "questiondownsmall",
+  "oneeighth",
+  "threeeighths",
+  "fiveeighths",
+  "seveneighths",
+  "onethird",
+  "twothirds",
+  "",
+  "",
+  "zerosuperior",
+  "onesuperior",
+  "twosuperior",
+  "threesuperior",
+  "foursuperior",
+  "fivesuperior",
+  "sixsuperior",
+  "sevensuperior",
+  "eightsuperior",
+  "ninesuperior",
+  "zeroinferior",
+  "oneinferior",
+  "twoinferior",
+  "threeinferior",
+  "fourinferior",
+  "fiveinferior",
+  "sixinferior",
+  "seveninferior",
+  "eightinferior",
+  "nineinferior",
+  "centinferior",
+  "dollarinferior",
+  "periodinferior",
+  "commainferior",
+  "Agravesmall",
+  "Aacutesmall",
+  "Acircumflexsmall",
+  "Atildesmall",
+  "Adieresissmall",
+  "Aringsmall",
+  "AEsmall",
+  "Ccedillasmall",
+  "Egravesmall",
+  "Eacutesmall",
+  "Ecircumflexsmall",
+  "Edieresissmall",
+  "Igravesmall",
+  "Iacutesmall",
+  "Icircumflexsmall",
+  "Idieresissmall",
+  "Ethsmall",
+  "Ntildesmall",
+  "Ogravesmall",
+  "Oacutesmall",
+  "Ocircumflexsmall",
+  "Otildesmall",
+  "Odieresissmall",
+  "OEsmall",
+  "Oslashsmall",
+  "Ugravesmall",
+  "Uacutesmall",
+  "Ucircumflexsmall",
+  "Udieresissmall",
+  "Yacutesmall",
+  "Thornsmall",
+  "Ydieresissmall"
+];
+var standardNames = [
+  ".notdef",
+  ".null",
+  "nonmarkingreturn",
+  "space",
+  "exclam",
+  "quotedbl",
+  "numbersign",
+  "dollar",
+  "percent",
+  "ampersand",
+  "quotesingle",
+  "parenleft",
+  "parenright",
+  "asterisk",
+  "plus",
+  "comma",
+  "hyphen",
+  "period",
+  "slash",
+  "zero",
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "colon",
+  "semicolon",
+  "less",
+  "equal",
+  "greater",
+  "question",
+  "at",
+  "A",
+  "B",
+  "C",
+  "D",
+  "E",
+  "F",
+  "G",
+  "H",
+  "I",
+  "J",
+  "K",
+  "L",
+  "M",
+  "N",
+  "O",
+  "P",
+  "Q",
+  "R",
+  "S",
+  "T",
+  "U",
+  "V",
+  "W",
+  "X",
+  "Y",
+  "Z",
+  "bracketleft",
+  "backslash",
+  "bracketright",
+  "asciicircum",
+  "underscore",
+  "grave",
+  "a",
+  "b",
+  "c",
+  "d",
+  "e",
+  "f",
+  "g",
+  "h",
+  "i",
+  "j",
+  "k",
+  "l",
+  "m",
+  "n",
+  "o",
+  "p",
+  "q",
+  "r",
+  "s",
+  "t",
+  "u",
+  "v",
+  "w",
+  "x",
+  "y",
+  "z",
+  "braceleft",
+  "bar",
+  "braceright",
+  "asciitilde",
+  "Adieresis",
+  "Aring",
+  "Ccedilla",
+  "Eacute",
+  "Ntilde",
+  "Odieresis",
+  "Udieresis",
+  "aacute",
+  "agrave",
+  "acircumflex",
+  "adieresis",
+  "atilde",
+  "aring",
+  "ccedilla",
+  "eacute",
+  "egrave",
+  "ecircumflex",
+  "edieresis",
+  "iacute",
+  "igrave",
+  "icircumflex",
+  "idieresis",
+  "ntilde",
+  "oacute",
+  "ograve",
+  "ocircumflex",
+  "odieresis",
+  "otilde",
+  "uacute",
+  "ugrave",
+  "ucircumflex",
+  "udieresis",
+  "dagger",
+  "degree",
+  "cent",
+  "sterling",
+  "section",
+  "bullet",
+  "paragraph",
+  "germandbls",
+  "registered",
+  "copyright",
+  "trademark",
+  "acute",
+  "dieresis",
+  "notequal",
+  "AE",
+  "Oslash",
+  "infinity",
+  "plusminus",
+  "lessequal",
+  "greaterequal",
+  "yen",
+  "mu",
+  "partialdiff",
+  "summation",
+  "product",
+  "pi",
+  "integral",
+  "ordfeminine",
+  "ordmasculine",
+  "Omega",
+  "ae",
+  "oslash",
+  "questiondown",
+  "exclamdown",
+  "logicalnot",
+  "radical",
+  "florin",
+  "approxequal",
+  "Delta",
+  "guillemotleft",
+  "guillemotright",
+  "ellipsis",
+  "nonbreakingspace",
+  "Agrave",
+  "Atilde",
+  "Otilde",
+  "OE",
+  "oe",
+  "endash",
+  "emdash",
+  "quotedblleft",
+  "quotedblright",
+  "quoteleft",
+  "quoteright",
+  "divide",
+  "lozenge",
+  "ydieresis",
+  "Ydieresis",
+  "fraction",
+  "currency",
+  "guilsinglleft",
+  "guilsinglright",
+  "fi",
+  "fl",
+  "daggerdbl",
+  "periodcentered",
+  "quotesinglbase",
+  "quotedblbase",
+  "perthousand",
+  "Acircumflex",
+  "Ecircumflex",
+  "Aacute",
+  "Edieresis",
+  "Egrave",
+  "Iacute",
+  "Icircumflex",
+  "Idieresis",
+  "Igrave",
+  "Oacute",
+  "Ocircumflex",
+  "apple",
+  "Ograve",
+  "Uacute",
+  "Ucircumflex",
+  "Ugrave",
+  "dotlessi",
+  "circumflex",
+  "tilde",
+  "macron",
+  "breve",
+  "dotaccent",
+  "ring",
+  "cedilla",
+  "hungarumlaut",
+  "ogonek",
+  "caron",
+  "Lslash",
+  "lslash",
+  "Scaron",
+  "scaron",
+  "Zcaron",
+  "zcaron",
+  "brokenbar",
+  "Eth",
+  "eth",
+  "Yacute",
+  "yacute",
+  "Thorn",
+  "thorn",
+  "minus",
+  "multiply",
+  "onesuperior",
+  "twosuperior",
+  "threesuperior",
+  "onehalf",
+  "onequarter",
+  "threequarters",
+  "franc",
+  "Gbreve",
+  "gbreve",
+  "Idotaccent",
+  "Scedilla",
+  "scedilla",
+  "Cacute",
+  "cacute",
+  "Ccaron",
+  "ccaron",
+  "dcroat"
+];
 function DefaultEncoding(font) {
   this.font = font;
 }
+DefaultEncoding.prototype.charToGlyphIndex = function(c) {
+  var code = c.codePointAt(0);
+  var glyphs = this.font.glyphs;
+  if (glyphs) {
+    for (var i = 0; i < glyphs.length; i += 1) {
+      var glyph = glyphs.get(i);
+      for (var j = 0; j < glyph.unicodes.length; j += 1) {
+        if (glyph.unicodes[j] === code) {
+          return i;
+        }
+      }
+    }
+  }
+  return null;
+};
 function CmapEncoding(cmap2) {
   this.cmap = cmap2;
 }
+CmapEncoding.prototype.charToGlyphIndex = function(c) {
+  return this.cmap.glyphIndexMap[c.codePointAt(0)] || 0;
+};
 function CffEncoding(encoding, charset) {
   this.encoding = encoding;
   this.charset = charset;
 }
+CffEncoding.prototype.charToGlyphIndex = function(s) {
+  var code = s.codePointAt(0);
+  var charName = this.encoding[code];
+  return this.charset.indexOf(charName);
+};
 function GlyphNames(post2) {
   switch (post2.version) {
     case 1:
@@ -744,6 +3229,12 @@ function GlyphNames(post2) {
       break;
   }
 }
+GlyphNames.prototype.nameToGlyphIndex = function(name) {
+  return this.names.indexOf(name);
+};
+GlyphNames.prototype.glyphIndexToName = function(gid) {
+  return this.names[gid];
+};
 function addGlyphNamesAll(font) {
   var glyph;
   var glyphIndexMap = font.tables.cmap.glyphIndexMap;
@@ -796,6 +3287,7 @@ function line(ctx, x1, y1, x2, y2) {
   ctx.lineTo(x2, y2);
   ctx.stroke();
 }
+var draw = { line };
 function getPathDefinition(glyph, path) {
   var _path = path || new Path();
   return {
@@ -814,6 +3306,213 @@ function getPathDefinition(glyph, path) {
 function Glyph(options) {
   this.bindConstructorValues(options);
 }
+Glyph.prototype.bindConstructorValues = function(options) {
+  this.index = options.index || 0;
+  this.name = options.name || null;
+  this.unicode = options.unicode || void 0;
+  this.unicodes = options.unicodes || options.unicode !== void 0 ? [options.unicode] : [];
+  if ("xMin" in options) {
+    this.xMin = options.xMin;
+  }
+  if ("yMin" in options) {
+    this.yMin = options.yMin;
+  }
+  if ("xMax" in options) {
+    this.xMax = options.xMax;
+  }
+  if ("yMax" in options) {
+    this.yMax = options.yMax;
+  }
+  if ("advanceWidth" in options) {
+    this.advanceWidth = options.advanceWidth;
+  }
+  Object.defineProperty(this, "path", getPathDefinition(this, options.path));
+};
+Glyph.prototype.addUnicode = function(unicode) {
+  if (this.unicodes.length === 0) {
+    this.unicode = unicode;
+  }
+  this.unicodes.push(unicode);
+};
+Glyph.prototype.getBoundingBox = function() {
+  return this.path.getBoundingBox();
+};
+Glyph.prototype.getPath = function(x, y, fontSize, options, font) {
+  x = x !== void 0 ? x : 0;
+  y = y !== void 0 ? y : 0;
+  fontSize = fontSize !== void 0 ? fontSize : 72;
+  var commands;
+  var hPoints;
+  if (!options) {
+    options = {};
+  }
+  var xScale = options.xScale;
+  var yScale = options.yScale;
+  if (options.hinting && font && font.hinting) {
+    hPoints = this.path && font.hinting.exec(this, fontSize);
+  }
+  if (hPoints) {
+    commands = font.hinting.getCommands(hPoints);
+    x = Math.round(x);
+    y = Math.round(y);
+    xScale = yScale = 1;
+  } else {
+    commands = this.path.commands;
+    var scale = 1 / (this.path.unitsPerEm || 1e3) * fontSize;
+    if (xScale === void 0) {
+      xScale = scale;
+    }
+    if (yScale === void 0) {
+      yScale = scale;
+    }
+  }
+  var p = new Path();
+  for (var i = 0; i < commands.length; i += 1) {
+    var cmd = commands[i];
+    if (cmd.type === "M") {
+      p.moveTo(x + cmd.x * xScale, y + -cmd.y * yScale);
+    } else if (cmd.type === "L") {
+      p.lineTo(x + cmd.x * xScale, y + -cmd.y * yScale);
+    } else if (cmd.type === "Q") {
+      p.quadraticCurveTo(
+        x + cmd.x1 * xScale,
+        y + -cmd.y1 * yScale,
+        x + cmd.x * xScale,
+        y + -cmd.y * yScale
+      );
+    } else if (cmd.type === "C") {
+      p.curveTo(
+        x + cmd.x1 * xScale,
+        y + -cmd.y1 * yScale,
+        x + cmd.x2 * xScale,
+        y + -cmd.y2 * yScale,
+        x + cmd.x * xScale,
+        y + -cmd.y * yScale
+      );
+    } else if (cmd.type === "Z") {
+      p.closePath();
+    }
+  }
+  return p;
+};
+Glyph.prototype.getContours = function() {
+  if (this.points === void 0) {
+    return [];
+  }
+  var contours = [];
+  var currentContour = [];
+  for (var i = 0; i < this.points.length; i += 1) {
+    var pt = this.points[i];
+    currentContour.push(pt);
+    if (pt.lastPointOfContour) {
+      contours.push(currentContour);
+      currentContour = [];
+    }
+  }
+  check.argument(currentContour.length === 0, "There are still points left in the current contour.");
+  return contours;
+};
+Glyph.prototype.getMetrics = function() {
+  var commands = this.path.commands;
+  var xCoords = [];
+  var yCoords = [];
+  for (var i = 0; i < commands.length; i += 1) {
+    var cmd = commands[i];
+    if (cmd.type !== "Z") {
+      xCoords.push(cmd.x);
+      yCoords.push(cmd.y);
+    }
+    if (cmd.type === "Q" || cmd.type === "C") {
+      xCoords.push(cmd.x1);
+      yCoords.push(cmd.y1);
+    }
+    if (cmd.type === "C") {
+      xCoords.push(cmd.x2);
+      yCoords.push(cmd.y2);
+    }
+  }
+  var metrics = {
+    xMin: Math.min.apply(null, xCoords),
+    yMin: Math.min.apply(null, yCoords),
+    xMax: Math.max.apply(null, xCoords),
+    yMax: Math.max.apply(null, yCoords),
+    leftSideBearing: this.leftSideBearing
+  };
+  if (!isFinite(metrics.xMin)) {
+    metrics.xMin = 0;
+  }
+  if (!isFinite(metrics.xMax)) {
+    metrics.xMax = this.advanceWidth;
+  }
+  if (!isFinite(metrics.yMin)) {
+    metrics.yMin = 0;
+  }
+  if (!isFinite(metrics.yMax)) {
+    metrics.yMax = 0;
+  }
+  metrics.rightSideBearing = this.advanceWidth - metrics.leftSideBearing - (metrics.xMax - metrics.xMin);
+  return metrics;
+};
+Glyph.prototype.draw = function(ctx, x, y, fontSize, options) {
+  this.getPath(x, y, fontSize, options).draw(ctx);
+};
+Glyph.prototype.drawPoints = function(ctx, x, y, fontSize) {
+  function drawCircles(l, x2, y2, scale2) {
+    ctx.beginPath();
+    for (var j = 0; j < l.length; j += 1) {
+      ctx.moveTo(x2 + l[j].x * scale2, y2 + l[j].y * scale2);
+      ctx.arc(x2 + l[j].x * scale2, y2 + l[j].y * scale2, 2, 0, Math.PI * 2, false);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+  x = x !== void 0 ? x : 0;
+  y = y !== void 0 ? y : 0;
+  fontSize = fontSize !== void 0 ? fontSize : 24;
+  var scale = 1 / this.path.unitsPerEm * fontSize;
+  var blueCircles = [];
+  var redCircles = [];
+  var path = this.path;
+  for (var i = 0; i < path.commands.length; i += 1) {
+    var cmd = path.commands[i];
+    if (cmd.x !== void 0) {
+      blueCircles.push({ x: cmd.x, y: -cmd.y });
+    }
+    if (cmd.x1 !== void 0) {
+      redCircles.push({ x: cmd.x1, y: -cmd.y1 });
+    }
+    if (cmd.x2 !== void 0) {
+      redCircles.push({ x: cmd.x2, y: -cmd.y2 });
+    }
+  }
+  ctx.fillStyle = "blue";
+  drawCircles(blueCircles, x, y, scale);
+  ctx.fillStyle = "red";
+  drawCircles(redCircles, x, y, scale);
+};
+Glyph.prototype.drawMetrics = function(ctx, x, y, fontSize) {
+  var scale;
+  x = x !== void 0 ? x : 0;
+  y = y !== void 0 ? y : 0;
+  fontSize = fontSize !== void 0 ? fontSize : 24;
+  scale = 1 / this.path.unitsPerEm * fontSize;
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "black";
+  draw.line(ctx, x, -1e4, x, 1e4);
+  draw.line(ctx, -1e4, y, 1e4, y);
+  var xMin = this.xMin || 0;
+  var yMin = this.yMin || 0;
+  var xMax = this.xMax || 0;
+  var yMax = this.yMax || 0;
+  var advanceWidth = this.advanceWidth || 0;
+  ctx.strokeStyle = "blue";
+  draw.line(ctx, x + xMin * scale, -1e4, x + xMin * scale, 1e4);
+  draw.line(ctx, x + xMax * scale, -1e4, x + xMax * scale, 1e4);
+  draw.line(ctx, -1e4, y + -yMin * scale, 1e4, y + -yMin * scale);
+  draw.line(ctx, -1e4, y + -yMax * scale, 1e4, y + -yMax * scale);
+  ctx.strokeStyle = "green";
+  draw.line(ctx, x + advanceWidth * scale, -1e4, x + advanceWidth * scale, 1e4);
+};
 function defineDependentProperty(glyph, externalName, internalName) {
   Object.defineProperty(glyph, externalName, {
     get: function() {
@@ -839,6 +3538,41 @@ function GlyphSet(font, glyphs) {
   }
   this.length = glyphs && glyphs.length || 0;
 }
+GlyphSet.prototype.get = function(index) {
+  if (this.glyphs[index] === void 0) {
+    this.font._push(index);
+    if (typeof this.glyphs[index] === "function") {
+      this.glyphs[index] = this.glyphs[index]();
+    }
+    var glyph = this.glyphs[index];
+    var unicodeObj = this.font._IndexToUnicodeMap[index];
+    if (unicodeObj) {
+      for (var j = 0; j < unicodeObj.unicodes.length; j++) {
+        glyph.addUnicode(unicodeObj.unicodes[j]);
+      }
+    }
+    if (this.font.cffEncoding) {
+      if (this.font.isCIDFont) {
+        glyph.name = "gid" + index;
+      } else {
+        glyph.name = this.font.cffEncoding.charset[index];
+      }
+    } else if (this.font.glyphNames.names) {
+      glyph.name = this.font.glyphNames.glyphIndexToName(index);
+    }
+    this.glyphs[index].advanceWidth = this.font._hmtxTableData[index].advanceWidth;
+    this.glyphs[index].leftSideBearing = this.font._hmtxTableData[index].leftSideBearing;
+  } else {
+    if (typeof this.glyphs[index] === "function") {
+      this.glyphs[index] = this.glyphs[index]();
+    }
+  }
+  return this.glyphs[index];
+};
+GlyphSet.prototype.push = function(index, loader) {
+  this.glyphs[index] = loader;
+  this.length++;
+};
 function glyphLoader(font, index) {
   return new Glyph({ index, font });
 }
@@ -869,6 +3603,7 @@ function cffGlyphLoader(font, index, parseCFFCharstring2, charstring) {
     return glyph;
   };
 }
+var glyphset = { GlyphSet, glyphLoader, ttfGlyphLoader, cffGlyphLoader };
 function equals(a, b) {
   if (a === b) {
     return true;
@@ -1096,6 +3831,48 @@ function parseCFFHeader(data, start) {
   header.endOffset = start + 4;
   return header;
 }
+var TOP_DICT_META = [
+  { name: "version", op: 0, type: "SID" },
+  { name: "notice", op: 1, type: "SID" },
+  { name: "copyright", op: 1200, type: "SID" },
+  { name: "fullName", op: 2, type: "SID" },
+  { name: "familyName", op: 3, type: "SID" },
+  { name: "weight", op: 4, type: "SID" },
+  { name: "isFixedPitch", op: 1201, type: "number", value: 0 },
+  { name: "italicAngle", op: 1202, type: "number", value: 0 },
+  { name: "underlinePosition", op: 1203, type: "number", value: -100 },
+  { name: "underlineThickness", op: 1204, type: "number", value: 50 },
+  { name: "paintType", op: 1205, type: "number", value: 0 },
+  { name: "charstringType", op: 1206, type: "number", value: 2 },
+  {
+    name: "fontMatrix",
+    op: 1207,
+    type: ["real", "real", "real", "real", "real", "real"],
+    value: [1e-3, 0, 0, 1e-3, 0, 0]
+  },
+  { name: "uniqueId", op: 13, type: "number" },
+  { name: "fontBBox", op: 5, type: ["number", "number", "number", "number"], value: [0, 0, 0, 0] },
+  { name: "strokeWidth", op: 1208, type: "number", value: 0 },
+  { name: "xuid", op: 14, type: [], value: null },
+  { name: "charset", op: 15, type: "offset", value: 0 },
+  { name: "encoding", op: 16, type: "offset", value: 0 },
+  { name: "charStrings", op: 17, type: "offset", value: 0 },
+  { name: "private", op: 18, type: ["number", "offset"], value: [0, 0] },
+  { name: "ros", op: 1230, type: ["SID", "SID", "number"] },
+  { name: "cidFontVersion", op: 1231, type: "number", value: 0 },
+  { name: "cidFontRevision", op: 1232, type: "number", value: 0 },
+  { name: "cidFontType", op: 1233, type: "number", value: 0 },
+  { name: "cidCount", op: 1234, type: "number", value: 8720 },
+  { name: "uidBase", op: 1235, type: "number" },
+  { name: "fdArray", op: 1236, type: "offset" },
+  { name: "fdSelect", op: 1237, type: "offset" },
+  { name: "fontName", op: 1238, type: "SID" }
+];
+var PRIVATE_DICT_META = [
+  { name: "subrs", op: 19, type: "offset", value: 0 },
+  { name: "defaultWidthX", op: 20, type: "number", value: 0 },
+  { name: "nominalWidthX", op: 21, type: "number", value: 0 }
+];
 function parseCFFTopDict(data, strings) {
   var dict = parseCFFDict(data, 0, data.byteLength);
   return interpretDict(dict, TOP_DICT_META, strings);
@@ -1909,6 +4686,7 @@ function makeCFFTable(glyphs, options) {
   t.topDictIndex = makeTopDictIndex(topDict);
   return t;
 }
+var cff = { parse: parseCFFTable, make: makeCFFTable };
 function parseHeadTable(data, start) {
   var head2 = {};
   var p = new parse.Parser(data, start);
@@ -1958,6 +4736,7 @@ function makeHeadTable(options) {
     { name: "glyphDataFormat", type: "SHORT", value: 0 }
   ], options);
 }
+var head = { parse: parseHeadTable, make: makeHeadTable };
 function parseHheaTable(data, start) {
   var hhea2 = {};
   var p = new parse.Parser(data, start);
@@ -1998,6 +4777,7 @@ function makeHheaTable(options) {
     { name: "numberOfHMetrics", type: "USHORT", value: 0 }
   ], options);
 }
+var hhea = { parse: parseHheaTable, make: makeHheaTable };
 function parseHmtxTableAll(data, start, numMetrics, numGlyphs, glyphs) {
   var advanceWidth;
   var leftSideBearing;
@@ -2046,6 +4826,7 @@ function makeHmtxTable(glyphs) {
   }
   return t;
 }
+var hmtx = { parse: parseHmtxTable, make: makeHmtxTable };
 function makeLtagTable(tags) {
   var result = new table.Table("ltag", [
     { name: "version", type: "ULONG", value: 1 },
@@ -2084,6 +4865,7 @@ function parseLtagTable(data, start) {
   }
   return tags;
 }
+var ltag = { make: makeLtagTable, parse: parseLtagTable };
 function parseMaxpTable(data, start) {
   var maxp2 = {};
   var p = new parse.Parser(data, start);
@@ -2112,6 +4894,630 @@ function makeMaxpTable(numGlyphs) {
     { name: "numGlyphs", type: "USHORT", value: numGlyphs }
   ]);
 }
+var maxp = { parse: parseMaxpTable, make: makeMaxpTable };
+var nameTableNames = [
+  "copyright",
+  // 0
+  "fontFamily",
+  // 1
+  "fontSubfamily",
+  // 2
+  "uniqueID",
+  // 3
+  "fullName",
+  // 4
+  "version",
+  // 5
+  "postScriptName",
+  // 6
+  "trademark",
+  // 7
+  "manufacturer",
+  // 8
+  "designer",
+  // 9
+  "description",
+  // 10
+  "manufacturerURL",
+  // 11
+  "designerURL",
+  // 12
+  "license",
+  // 13
+  "licenseURL",
+  // 14
+  "reserved",
+  // 15
+  "preferredFamily",
+  // 16
+  "preferredSubfamily",
+  // 17
+  "compatibleFullName",
+  // 18
+  "sampleText",
+  // 19
+  "postScriptFindFontName",
+  // 20
+  "wwsFamily",
+  // 21
+  "wwsSubfamily"
+  // 22
+];
+var macLanguages = {
+  0: "en",
+  1: "fr",
+  2: "de",
+  3: "it",
+  4: "nl",
+  5: "sv",
+  6: "es",
+  7: "da",
+  8: "pt",
+  9: "no",
+  10: "he",
+  11: "ja",
+  12: "ar",
+  13: "fi",
+  14: "el",
+  15: "is",
+  16: "mt",
+  17: "tr",
+  18: "hr",
+  19: "zh-Hant",
+  20: "ur",
+  21: "hi",
+  22: "th",
+  23: "ko",
+  24: "lt",
+  25: "pl",
+  26: "hu",
+  27: "es",
+  28: "lv",
+  29: "se",
+  30: "fo",
+  31: "fa",
+  32: "ru",
+  33: "zh",
+  34: "nl-BE",
+  35: "ga",
+  36: "sq",
+  37: "ro",
+  38: "cz",
+  39: "sk",
+  40: "si",
+  41: "yi",
+  42: "sr",
+  43: "mk",
+  44: "bg",
+  45: "uk",
+  46: "be",
+  47: "uz",
+  48: "kk",
+  49: "az-Cyrl",
+  50: "az-Arab",
+  51: "hy",
+  52: "ka",
+  53: "mo",
+  54: "ky",
+  55: "tg",
+  56: "tk",
+  57: "mn-CN",
+  58: "mn",
+  59: "ps",
+  60: "ks",
+  61: "ku",
+  62: "sd",
+  63: "bo",
+  64: "ne",
+  65: "sa",
+  66: "mr",
+  67: "bn",
+  68: "as",
+  69: "gu",
+  70: "pa",
+  71: "or",
+  72: "ml",
+  73: "kn",
+  74: "ta",
+  75: "te",
+  76: "si",
+  77: "my",
+  78: "km",
+  79: "lo",
+  80: "vi",
+  81: "id",
+  82: "tl",
+  83: "ms",
+  84: "ms-Arab",
+  85: "am",
+  86: "ti",
+  87: "om",
+  88: "so",
+  89: "sw",
+  90: "rw",
+  91: "rn",
+  92: "ny",
+  93: "mg",
+  94: "eo",
+  128: "cy",
+  129: "eu",
+  130: "ca",
+  131: "la",
+  132: "qu",
+  133: "gn",
+  134: "ay",
+  135: "tt",
+  136: "ug",
+  137: "dz",
+  138: "jv",
+  139: "su",
+  140: "gl",
+  141: "af",
+  142: "br",
+  143: "iu",
+  144: "gd",
+  145: "gv",
+  146: "ga",
+  147: "to",
+  148: "el-polyton",
+  149: "kl",
+  150: "az",
+  151: "nn"
+};
+var macLanguageToScript = {
+  0: 0,
+  // langEnglish → smRoman
+  1: 0,
+  // langFrench → smRoman
+  2: 0,
+  // langGerman → smRoman
+  3: 0,
+  // langItalian → smRoman
+  4: 0,
+  // langDutch → smRoman
+  5: 0,
+  // langSwedish → smRoman
+  6: 0,
+  // langSpanish → smRoman
+  7: 0,
+  // langDanish → smRoman
+  8: 0,
+  // langPortuguese → smRoman
+  9: 0,
+  // langNorwegian → smRoman
+  10: 5,
+  // langHebrew → smHebrew
+  11: 1,
+  // langJapanese → smJapanese
+  12: 4,
+  // langArabic → smArabic
+  13: 0,
+  // langFinnish → smRoman
+  14: 6,
+  // langGreek → smGreek
+  15: 0,
+  // langIcelandic → smRoman (modified)
+  16: 0,
+  // langMaltese → smRoman
+  17: 0,
+  // langTurkish → smRoman (modified)
+  18: 0,
+  // langCroatian → smRoman (modified)
+  19: 2,
+  // langTradChinese → smTradChinese
+  20: 4,
+  // langUrdu → smArabic
+  21: 9,
+  // langHindi → smDevanagari
+  22: 21,
+  // langThai → smThai
+  23: 3,
+  // langKorean → smKorean
+  24: 29,
+  // langLithuanian → smCentralEuroRoman
+  25: 29,
+  // langPolish → smCentralEuroRoman
+  26: 29,
+  // langHungarian → smCentralEuroRoman
+  27: 29,
+  // langEstonian → smCentralEuroRoman
+  28: 29,
+  // langLatvian → smCentralEuroRoman
+  29: 0,
+  // langSami → smRoman
+  30: 0,
+  // langFaroese → smRoman (modified)
+  31: 4,
+  // langFarsi → smArabic (modified)
+  32: 7,
+  // langRussian → smCyrillic
+  33: 25,
+  // langSimpChinese → smSimpChinese
+  34: 0,
+  // langFlemish → smRoman
+  35: 0,
+  // langIrishGaelic → smRoman (modified)
+  36: 0,
+  // langAlbanian → smRoman
+  37: 0,
+  // langRomanian → smRoman (modified)
+  38: 29,
+  // langCzech → smCentralEuroRoman
+  39: 29,
+  // langSlovak → smCentralEuroRoman
+  40: 0,
+  // langSlovenian → smRoman (modified)
+  41: 5,
+  // langYiddish → smHebrew
+  42: 7,
+  // langSerbian → smCyrillic
+  43: 7,
+  // langMacedonian → smCyrillic
+  44: 7,
+  // langBulgarian → smCyrillic
+  45: 7,
+  // langUkrainian → smCyrillic (modified)
+  46: 7,
+  // langByelorussian → smCyrillic
+  47: 7,
+  // langUzbek → smCyrillic
+  48: 7,
+  // langKazakh → smCyrillic
+  49: 7,
+  // langAzerbaijani → smCyrillic
+  50: 4,
+  // langAzerbaijanAr → smArabic
+  51: 24,
+  // langArmenian → smArmenian
+  52: 23,
+  // langGeorgian → smGeorgian
+  53: 7,
+  // langMoldavian → smCyrillic
+  54: 7,
+  // langKirghiz → smCyrillic
+  55: 7,
+  // langTajiki → smCyrillic
+  56: 7,
+  // langTurkmen → smCyrillic
+  57: 27,
+  // langMongolian → smMongolian
+  58: 7,
+  // langMongolianCyr → smCyrillic
+  59: 4,
+  // langPashto → smArabic
+  60: 4,
+  // langKurdish → smArabic
+  61: 4,
+  // langKashmiri → smArabic
+  62: 4,
+  // langSindhi → smArabic
+  63: 26,
+  // langTibetan → smTibetan
+  64: 9,
+  // langNepali → smDevanagari
+  65: 9,
+  // langSanskrit → smDevanagari
+  66: 9,
+  // langMarathi → smDevanagari
+  67: 13,
+  // langBengali → smBengali
+  68: 13,
+  // langAssamese → smBengali
+  69: 11,
+  // langGujarati → smGujarati
+  70: 10,
+  // langPunjabi → smGurmukhi
+  71: 12,
+  // langOriya → smOriya
+  72: 17,
+  // langMalayalam → smMalayalam
+  73: 16,
+  // langKannada → smKannada
+  74: 14,
+  // langTamil → smTamil
+  75: 15,
+  // langTelugu → smTelugu
+  76: 18,
+  // langSinhalese → smSinhalese
+  77: 19,
+  // langBurmese → smBurmese
+  78: 20,
+  // langKhmer → smKhmer
+  79: 22,
+  // langLao → smLao
+  80: 30,
+  // langVietnamese → smVietnamese
+  81: 0,
+  // langIndonesian → smRoman
+  82: 0,
+  // langTagalog → smRoman
+  83: 0,
+  // langMalayRoman → smRoman
+  84: 4,
+  // langMalayArabic → smArabic
+  85: 28,
+  // langAmharic → smEthiopic
+  86: 28,
+  // langTigrinya → smEthiopic
+  87: 28,
+  // langOromo → smEthiopic
+  88: 0,
+  // langSomali → smRoman
+  89: 0,
+  // langSwahili → smRoman
+  90: 0,
+  // langKinyarwanda → smRoman
+  91: 0,
+  // langRundi → smRoman
+  92: 0,
+  // langNyanja → smRoman
+  93: 0,
+  // langMalagasy → smRoman
+  94: 0,
+  // langEsperanto → smRoman
+  128: 0,
+  // langWelsh → smRoman (modified)
+  129: 0,
+  // langBasque → smRoman
+  130: 0,
+  // langCatalan → smRoman
+  131: 0,
+  // langLatin → smRoman
+  132: 0,
+  // langQuechua → smRoman
+  133: 0,
+  // langGuarani → smRoman
+  134: 0,
+  // langAymara → smRoman
+  135: 7,
+  // langTatar → smCyrillic
+  136: 4,
+  // langUighur → smArabic
+  137: 26,
+  // langDzongkha → smTibetan
+  138: 0,
+  // langJavaneseRom → smRoman
+  139: 0,
+  // langSundaneseRom → smRoman
+  140: 0,
+  // langGalician → smRoman
+  141: 0,
+  // langAfrikaans → smRoman
+  142: 0,
+  // langBreton → smRoman (modified)
+  143: 28,
+  // langInuktitut → smEthiopic (modified)
+  144: 0,
+  // langScottishGaelic → smRoman (modified)
+  145: 0,
+  // langManxGaelic → smRoman (modified)
+  146: 0,
+  // langIrishGaelicScript → smRoman (modified)
+  147: 0,
+  // langTongan → smRoman
+  148: 6,
+  // langGreekAncient → smRoman
+  149: 0,
+  // langGreenlandic → smRoman
+  150: 0,
+  // langAzerbaijanRoman → smRoman
+  151: 0
+  // langNynorsk → smRoman
+};
+var windowsLanguages = {
+  1078: "af",
+  1052: "sq",
+  1156: "gsw",
+  1118: "am",
+  5121: "ar-DZ",
+  15361: "ar-BH",
+  3073: "ar",
+  2049: "ar-IQ",
+  11265: "ar-JO",
+  13313: "ar-KW",
+  12289: "ar-LB",
+  4097: "ar-LY",
+  6145: "ary",
+  8193: "ar-OM",
+  16385: "ar-QA",
+  1025: "ar-SA",
+  10241: "ar-SY",
+  7169: "aeb",
+  14337: "ar-AE",
+  9217: "ar-YE",
+  1067: "hy",
+  1101: "as",
+  2092: "az-Cyrl",
+  1068: "az",
+  1133: "ba",
+  1069: "eu",
+  1059: "be",
+  2117: "bn",
+  1093: "bn-IN",
+  8218: "bs-Cyrl",
+  5146: "bs",
+  1150: "br",
+  1026: "bg",
+  1027: "ca",
+  3076: "zh-HK",
+  5124: "zh-MO",
+  2052: "zh",
+  4100: "zh-SG",
+  1028: "zh-TW",
+  1155: "co",
+  1050: "hr",
+  4122: "hr-BA",
+  1029: "cs",
+  1030: "da",
+  1164: "prs",
+  1125: "dv",
+  2067: "nl-BE",
+  1043: "nl",
+  3081: "en-AU",
+  10249: "en-BZ",
+  4105: "en-CA",
+  9225: "en-029",
+  16393: "en-IN",
+  6153: "en-IE",
+  8201: "en-JM",
+  17417: "en-MY",
+  5129: "en-NZ",
+  13321: "en-PH",
+  18441: "en-SG",
+  7177: "en-ZA",
+  11273: "en-TT",
+  2057: "en-GB",
+  1033: "en",
+  12297: "en-ZW",
+  1061: "et",
+  1080: "fo",
+  1124: "fil",
+  1035: "fi",
+  2060: "fr-BE",
+  3084: "fr-CA",
+  1036: "fr",
+  5132: "fr-LU",
+  6156: "fr-MC",
+  4108: "fr-CH",
+  1122: "fy",
+  1110: "gl",
+  1079: "ka",
+  3079: "de-AT",
+  1031: "de",
+  5127: "de-LI",
+  4103: "de-LU",
+  2055: "de-CH",
+  1032: "el",
+  1135: "kl",
+  1095: "gu",
+  1128: "ha",
+  1037: "he",
+  1081: "hi",
+  1038: "hu",
+  1039: "is",
+  1136: "ig",
+  1057: "id",
+  1117: "iu",
+  2141: "iu-Latn",
+  2108: "ga",
+  1076: "xh",
+  1077: "zu",
+  1040: "it",
+  2064: "it-CH",
+  1041: "ja",
+  1099: "kn",
+  1087: "kk",
+  1107: "km",
+  1158: "quc",
+  1159: "rw",
+  1089: "sw",
+  1111: "kok",
+  1042: "ko",
+  1088: "ky",
+  1108: "lo",
+  1062: "lv",
+  1063: "lt",
+  2094: "dsb",
+  1134: "lb",
+  1071: "mk",
+  2110: "ms-BN",
+  1086: "ms",
+  1100: "ml",
+  1082: "mt",
+  1153: "mi",
+  1146: "arn",
+  1102: "mr",
+  1148: "moh",
+  1104: "mn",
+  2128: "mn-CN",
+  1121: "ne",
+  1044: "nb",
+  2068: "nn",
+  1154: "oc",
+  1096: "or",
+  1123: "ps",
+  1045: "pl",
+  1046: "pt",
+  2070: "pt-PT",
+  1094: "pa",
+  1131: "qu-BO",
+  2155: "qu-EC",
+  3179: "qu",
+  1048: "ro",
+  1047: "rm",
+  1049: "ru",
+  9275: "smn",
+  4155: "smj-NO",
+  5179: "smj",
+  3131: "se-FI",
+  1083: "se",
+  2107: "se-SE",
+  8251: "sms",
+  6203: "sma-NO",
+  7227: "sms",
+  1103: "sa",
+  7194: "sr-Cyrl-BA",
+  3098: "sr",
+  6170: "sr-Latn-BA",
+  2074: "sr-Latn",
+  1132: "nso",
+  1074: "tn",
+  1115: "si",
+  1051: "sk",
+  1060: "sl",
+  11274: "es-AR",
+  16394: "es-BO",
+  13322: "es-CL",
+  9226: "es-CO",
+  5130: "es-CR",
+  7178: "es-DO",
+  12298: "es-EC",
+  17418: "es-SV",
+  4106: "es-GT",
+  18442: "es-HN",
+  2058: "es-MX",
+  19466: "es-NI",
+  6154: "es-PA",
+  15370: "es-PY",
+  10250: "es-PE",
+  20490: "es-PR",
+  // Microsoft has defined two different language codes for
+  // “Spanish with modern sorting” and “Spanish with traditional
+  // sorting”. This makes sense for collation APIs, and it would be
+  // possible to express this in BCP 47 language tags via Unicode
+  // extensions (eg., es-u-co-trad is Spanish with traditional
+  // sorting). However, for storing names in fonts, the distinction
+  // does not make sense, so we give “es” in both cases.
+  3082: "es",
+  1034: "es",
+  21514: "es-US",
+  14346: "es-UY",
+  8202: "es-VE",
+  2077: "sv-FI",
+  1053: "sv",
+  1114: "syr",
+  1064: "tg",
+  2143: "tzm",
+  1097: "ta",
+  1092: "tt",
+  1098: "te",
+  1054: "th",
+  1105: "bo",
+  1055: "tr",
+  1090: "tk",
+  1152: "ug",
+  1058: "uk",
+  1070: "hsb",
+  1056: "ur",
+  2115: "uz-Cyrl",
+  1091: "uz",
+  1066: "vi",
+  1106: "cy",
+  1160: "wo",
+  1157: "sah",
+  1144: "ii",
+  1130: "yo"
+};
 function getLanguageCode(platformID, languageID, ltag2) {
   switch (platformID) {
     case 0:
@@ -2128,6 +5534,99 @@ function getLanguageCode(platformID, languageID, ltag2) {
   }
   return void 0;
 }
+var utf16 = "utf-16";
+var macScriptEncodings = {
+  0: "macintosh",
+  // smRoman
+  1: "x-mac-japanese",
+  // smJapanese
+  2: "x-mac-chinesetrad",
+  // smTradChinese
+  3: "x-mac-korean",
+  // smKorean
+  6: "x-mac-greek",
+  // smGreek
+  7: "x-mac-cyrillic",
+  // smCyrillic
+  9: "x-mac-devanagai",
+  // smDevanagari
+  10: "x-mac-gurmukhi",
+  // smGurmukhi
+  11: "x-mac-gujarati",
+  // smGujarati
+  12: "x-mac-oriya",
+  // smOriya
+  13: "x-mac-bengali",
+  // smBengali
+  14: "x-mac-tamil",
+  // smTamil
+  15: "x-mac-telugu",
+  // smTelugu
+  16: "x-mac-kannada",
+  // smKannada
+  17: "x-mac-malayalam",
+  // smMalayalam
+  18: "x-mac-sinhalese",
+  // smSinhalese
+  19: "x-mac-burmese",
+  // smBurmese
+  20: "x-mac-khmer",
+  // smKhmer
+  21: "x-mac-thai",
+  // smThai
+  22: "x-mac-lao",
+  // smLao
+  23: "x-mac-georgian",
+  // smGeorgian
+  24: "x-mac-armenian",
+  // smArmenian
+  25: "x-mac-chinesesimp",
+  // smSimpChinese
+  26: "x-mac-tibetan",
+  // smTibetan
+  27: "x-mac-mongolian",
+  // smMongolian
+  28: "x-mac-ethiopic",
+  // smEthiopic
+  29: "x-mac-ce",
+  // smCentralEuroRoman
+  30: "x-mac-vietnamese",
+  // smVietnamese
+  31: "x-mac-extarabic"
+  // smExtArabic
+};
+var macLanguageEncodings = {
+  15: "x-mac-icelandic",
+  // langIcelandic
+  17: "x-mac-turkish",
+  // langTurkish
+  18: "x-mac-croatian",
+  // langCroatian
+  24: "x-mac-ce",
+  // langLithuanian
+  25: "x-mac-ce",
+  // langPolish
+  26: "x-mac-ce",
+  // langHungarian
+  27: "x-mac-ce",
+  // langEstonian
+  28: "x-mac-ce",
+  // langLatvian
+  30: "x-mac-icelandic",
+  // langFaroese
+  37: "x-mac-romanian",
+  // langRomanian
+  38: "x-mac-ce",
+  // langCzech
+  39: "x-mac-ce",
+  // langSlovak
+  40: "x-mac-ce",
+  // langSlovenian
+  143: "x-mac-inuit",
+  // langInuktitut
+  146: "x-mac-gaelic"
+  // langIrishGaelicScript
+};
 function getEncoding(platformID, encodingID, languageID) {
   switch (platformID) {
     case 0:
@@ -2304,6 +5803,255 @@ function makeNameTable(names, ltag2) {
   t.fields.push({ name: "strings", type: "LITERAL", value: stringPool });
   return t;
 }
+var _name = { parse: parseNameTable, make: makeNameTable };
+var unicodeRanges = [
+  { begin: 0, end: 127 },
+  // Basic Latin
+  { begin: 128, end: 255 },
+  // Latin-1 Supplement
+  { begin: 256, end: 383 },
+  // Latin Extended-A
+  { begin: 384, end: 591 },
+  // Latin Extended-B
+  { begin: 592, end: 687 },
+  // IPA Extensions
+  { begin: 688, end: 767 },
+  // Spacing Modifier Letters
+  { begin: 768, end: 879 },
+  // Combining Diacritical Marks
+  { begin: 880, end: 1023 },
+  // Greek and Coptic
+  { begin: 11392, end: 11519 },
+  // Coptic
+  { begin: 1024, end: 1279 },
+  // Cyrillic
+  { begin: 1328, end: 1423 },
+  // Armenian
+  { begin: 1424, end: 1535 },
+  // Hebrew
+  { begin: 42240, end: 42559 },
+  // Vai
+  { begin: 1536, end: 1791 },
+  // Arabic
+  { begin: 1984, end: 2047 },
+  // NKo
+  { begin: 2304, end: 2431 },
+  // Devanagari
+  { begin: 2432, end: 2559 },
+  // Bengali
+  { begin: 2560, end: 2687 },
+  // Gurmukhi
+  { begin: 2688, end: 2815 },
+  // Gujarati
+  { begin: 2816, end: 2943 },
+  // Oriya
+  { begin: 2944, end: 3071 },
+  // Tamil
+  { begin: 3072, end: 3199 },
+  // Telugu
+  { begin: 3200, end: 3327 },
+  // Kannada
+  { begin: 3328, end: 3455 },
+  // Malayalam
+  { begin: 3584, end: 3711 },
+  // Thai
+  { begin: 3712, end: 3839 },
+  // Lao
+  { begin: 4256, end: 4351 },
+  // Georgian
+  { begin: 6912, end: 7039 },
+  // Balinese
+  { begin: 4352, end: 4607 },
+  // Hangul Jamo
+  { begin: 7680, end: 7935 },
+  // Latin Extended Additional
+  { begin: 7936, end: 8191 },
+  // Greek Extended
+  { begin: 8192, end: 8303 },
+  // General Punctuation
+  { begin: 8304, end: 8351 },
+  // Superscripts And Subscripts
+  { begin: 8352, end: 8399 },
+  // Currency Symbol
+  { begin: 8400, end: 8447 },
+  // Combining Diacritical Marks For Symbols
+  { begin: 8448, end: 8527 },
+  // Letterlike Symbols
+  { begin: 8528, end: 8591 },
+  // Number Forms
+  { begin: 8592, end: 8703 },
+  // Arrows
+  { begin: 8704, end: 8959 },
+  // Mathematical Operators
+  { begin: 8960, end: 9215 },
+  // Miscellaneous Technical
+  { begin: 9216, end: 9279 },
+  // Control Pictures
+  { begin: 9280, end: 9311 },
+  // Optical Character Recognition
+  { begin: 9312, end: 9471 },
+  // Enclosed Alphanumerics
+  { begin: 9472, end: 9599 },
+  // Box Drawing
+  { begin: 9600, end: 9631 },
+  // Block Elements
+  { begin: 9632, end: 9727 },
+  // Geometric Shapes
+  { begin: 9728, end: 9983 },
+  // Miscellaneous Symbols
+  { begin: 9984, end: 10175 },
+  // Dingbats
+  { begin: 12288, end: 12351 },
+  // CJK Symbols And Punctuation
+  { begin: 12352, end: 12447 },
+  // Hiragana
+  { begin: 12448, end: 12543 },
+  // Katakana
+  { begin: 12544, end: 12591 },
+  // Bopomofo
+  { begin: 12592, end: 12687 },
+  // Hangul Compatibility Jamo
+  { begin: 43072, end: 43135 },
+  // Phags-pa
+  { begin: 12800, end: 13055 },
+  // Enclosed CJK Letters And Months
+  { begin: 13056, end: 13311 },
+  // CJK Compatibility
+  { begin: 44032, end: 55215 },
+  // Hangul Syllables
+  { begin: 55296, end: 57343 },
+  // Non-Plane 0 *
+  { begin: 67840, end: 67871 },
+  // Phoenicia
+  { begin: 19968, end: 40959 },
+  // CJK Unified Ideographs
+  { begin: 57344, end: 63743 },
+  // Private Use Area (plane 0)
+  { begin: 12736, end: 12783 },
+  // CJK Strokes
+  { begin: 64256, end: 64335 },
+  // Alphabetic Presentation Forms
+  { begin: 64336, end: 65023 },
+  // Arabic Presentation Forms-A
+  { begin: 65056, end: 65071 },
+  // Combining Half Marks
+  { begin: 65040, end: 65055 },
+  // Vertical Forms
+  { begin: 65104, end: 65135 },
+  // Small Form Variants
+  { begin: 65136, end: 65279 },
+  // Arabic Presentation Forms-B
+  { begin: 65280, end: 65519 },
+  // Halfwidth And Fullwidth Forms
+  { begin: 65520, end: 65535 },
+  // Specials
+  { begin: 3840, end: 4095 },
+  // Tibetan
+  { begin: 1792, end: 1871 },
+  // Syriac
+  { begin: 1920, end: 1983 },
+  // Thaana
+  { begin: 3456, end: 3583 },
+  // Sinhala
+  { begin: 4096, end: 4255 },
+  // Myanmar
+  { begin: 4608, end: 4991 },
+  // Ethiopic
+  { begin: 5024, end: 5119 },
+  // Cherokee
+  { begin: 5120, end: 5759 },
+  // Unified Canadian Aboriginal Syllabics
+  { begin: 5760, end: 5791 },
+  // Ogham
+  { begin: 5792, end: 5887 },
+  // Runic
+  { begin: 6016, end: 6143 },
+  // Khmer
+  { begin: 6144, end: 6319 },
+  // Mongolian
+  { begin: 10240, end: 10495 },
+  // Braille Patterns
+  { begin: 40960, end: 42127 },
+  // Yi Syllables
+  { begin: 5888, end: 5919 },
+  // Tagalog
+  { begin: 66304, end: 66351 },
+  // Old Italic
+  { begin: 66352, end: 66383 },
+  // Gothic
+  { begin: 66560, end: 66639 },
+  // Deseret
+  { begin: 118784, end: 119039 },
+  // Byzantine Musical Symbols
+  { begin: 119808, end: 120831 },
+  // Mathematical Alphanumeric Symbols
+  { begin: 1044480, end: 1048573 },
+  // Private Use (plane 15)
+  { begin: 65024, end: 65039 },
+  // Variation Selectors
+  { begin: 917504, end: 917631 },
+  // Tags
+  { begin: 6400, end: 6479 },
+  // Limbu
+  { begin: 6480, end: 6527 },
+  // Tai Le
+  { begin: 6528, end: 6623 },
+  // New Tai Lue
+  { begin: 6656, end: 6687 },
+  // Buginese
+  { begin: 11264, end: 11359 },
+  // Glagolitic
+  { begin: 11568, end: 11647 },
+  // Tifinagh
+  { begin: 19904, end: 19967 },
+  // Yijing Hexagram Symbols
+  { begin: 43008, end: 43055 },
+  // Syloti Nagri
+  { begin: 65536, end: 65663 },
+  // Linear B Syllabary
+  { begin: 65856, end: 65935 },
+  // Ancient Greek Numbers
+  { begin: 66432, end: 66463 },
+  // Ugaritic
+  { begin: 66464, end: 66527 },
+  // Old Persian
+  { begin: 66640, end: 66687 },
+  // Shavian
+  { begin: 66688, end: 66735 },
+  // Osmanya
+  { begin: 67584, end: 67647 },
+  // Cypriot Syllabary
+  { begin: 68096, end: 68191 },
+  // Kharoshthi
+  { begin: 119552, end: 119647 },
+  // Tai Xuan Jing Symbols
+  { begin: 73728, end: 74751 },
+  // Cuneiform
+  { begin: 119648, end: 119679 },
+  // Counting Rod Numerals
+  { begin: 7040, end: 7103 },
+  // Sundanese
+  { begin: 7168, end: 7247 },
+  // Lepcha
+  { begin: 7248, end: 7295 },
+  // Ol Chiki
+  { begin: 43136, end: 43231 },
+  // Saurashtra
+  { begin: 43264, end: 43311 },
+  // Kayah Li
+  { begin: 43312, end: 43359 },
+  // Rejang
+  { begin: 43520, end: 43615 },
+  // Cham
+  { begin: 65936, end: 65999 },
+  // Ancient Symbols
+  { begin: 66e3, end: 66047 },
+  // Phaistos Disc
+  { begin: 66208, end: 66271 },
+  // Carian
+  { begin: 127024, end: 127135 }
+  // Domino Tiles
+];
 function getUnicodeRange(unicode) {
   for (var i = 0; i < unicodeRanges.length; i += 1) {
     var range = unicodeRanges[i];
@@ -2412,6 +6160,7 @@ function makeOS2Table(options) {
     { name: "usMaxContext", type: "USHORT", value: 0 }
   ], options);
 }
+var os2 = { parse: parseOS2Table, make: makeOS2Table, unicodeRanges, getUnicodeRange };
 function parsePostTable(data, start) {
   var post2 = {};
   var p = new parse.Parser(data, start);
@@ -2465,6 +6214,168 @@ function makePostTable() {
     { name: "maxMemType1", type: "ULONG", value: 0 }
   ]);
 }
+var post = { parse: parsePostTable, make: makePostTable };
+var subtableParsers = new Array(9);
+subtableParsers[1] = function parseLookup1() {
+  var start = this.offset + this.relativeOffset;
+  var substFormat = this.parseUShort();
+  if (substFormat === 1) {
+    return {
+      substFormat: 1,
+      coverage: this.parsePointer(Parser.coverage),
+      deltaGlyphId: this.parseUShort()
+    };
+  } else if (substFormat === 2) {
+    return {
+      substFormat: 2,
+      coverage: this.parsePointer(Parser.coverage),
+      substitute: this.parseOffset16List()
+    };
+  }
+  check.assert(false, "0x" + start.toString(16) + ": lookup type 1 format must be 1 or 2.");
+};
+subtableParsers[2] = function parseLookup2() {
+  var substFormat = this.parseUShort();
+  check.argument(substFormat === 1, "GSUB Multiple Substitution Subtable identifier-format must be 1");
+  return {
+    substFormat,
+    coverage: this.parsePointer(Parser.coverage),
+    sequences: this.parseListOfLists()
+  };
+};
+subtableParsers[3] = function parseLookup3() {
+  var substFormat = this.parseUShort();
+  check.argument(substFormat === 1, "GSUB Alternate Substitution Subtable identifier-format must be 1");
+  return {
+    substFormat,
+    coverage: this.parsePointer(Parser.coverage),
+    alternateSets: this.parseListOfLists()
+  };
+};
+subtableParsers[4] = function parseLookup4() {
+  var substFormat = this.parseUShort();
+  check.argument(substFormat === 1, "GSUB ligature table identifier-format must be 1");
+  return {
+    substFormat,
+    coverage: this.parsePointer(Parser.coverage),
+    ligatureSets: this.parseListOfLists(function() {
+      return {
+        ligGlyph: this.parseUShort(),
+        components: this.parseUShortList(this.parseUShort() - 1)
+      };
+    })
+  };
+};
+var lookupRecordDesc = {
+  sequenceIndex: Parser.uShort,
+  lookupListIndex: Parser.uShort
+};
+subtableParsers[5] = function parseLookup5() {
+  var start = this.offset + this.relativeOffset;
+  var substFormat = this.parseUShort();
+  if (substFormat === 1) {
+    return {
+      substFormat,
+      coverage: this.parsePointer(Parser.coverage),
+      ruleSets: this.parseListOfLists(function() {
+        var glyphCount2 = this.parseUShort();
+        var substCount2 = this.parseUShort();
+        return {
+          input: this.parseUShortList(glyphCount2 - 1),
+          lookupRecords: this.parseRecordList(substCount2, lookupRecordDesc)
+        };
+      })
+    };
+  } else if (substFormat === 2) {
+    return {
+      substFormat,
+      coverage: this.parsePointer(Parser.coverage),
+      classDef: this.parsePointer(Parser.classDef),
+      classSets: this.parseListOfLists(function() {
+        var glyphCount2 = this.parseUShort();
+        var substCount2 = this.parseUShort();
+        return {
+          classes: this.parseUShortList(glyphCount2 - 1),
+          lookupRecords: this.parseRecordList(substCount2, lookupRecordDesc)
+        };
+      })
+    };
+  } else if (substFormat === 3) {
+    var glyphCount = this.parseUShort();
+    var substCount = this.parseUShort();
+    return {
+      substFormat,
+      coverages: this.parseList(glyphCount, Parser.pointer(Parser.coverage)),
+      lookupRecords: this.parseRecordList(substCount, lookupRecordDesc)
+    };
+  }
+  check.assert(false, "0x" + start.toString(16) + ": lookup type 5 format must be 1, 2 or 3.");
+};
+subtableParsers[6] = function parseLookup6() {
+  var start = this.offset + this.relativeOffset;
+  var substFormat = this.parseUShort();
+  if (substFormat === 1) {
+    return {
+      substFormat: 1,
+      coverage: this.parsePointer(Parser.coverage),
+      chainRuleSets: this.parseListOfLists(function() {
+        return {
+          backtrack: this.parseUShortList(),
+          input: this.parseUShortList(this.parseShort() - 1),
+          lookahead: this.parseUShortList(),
+          lookupRecords: this.parseRecordList(lookupRecordDesc)
+        };
+      })
+    };
+  } else if (substFormat === 2) {
+    return {
+      substFormat: 2,
+      coverage: this.parsePointer(Parser.coverage),
+      backtrackClassDef: this.parsePointer(Parser.classDef),
+      inputClassDef: this.parsePointer(Parser.classDef),
+      lookaheadClassDef: this.parsePointer(Parser.classDef),
+      chainClassSet: this.parseListOfLists(function() {
+        return {
+          backtrack: this.parseUShortList(),
+          input: this.parseUShortList(this.parseShort() - 1),
+          lookahead: this.parseUShortList(),
+          lookupRecords: this.parseRecordList(lookupRecordDesc)
+        };
+      })
+    };
+  } else if (substFormat === 3) {
+    return {
+      substFormat: 3,
+      backtrackCoverage: this.parseList(Parser.pointer(Parser.coverage)),
+      inputCoverage: this.parseList(Parser.pointer(Parser.coverage)),
+      lookaheadCoverage: this.parseList(Parser.pointer(Parser.coverage)),
+      lookupRecords: this.parseRecordList(lookupRecordDesc)
+    };
+  }
+  check.assert(false, "0x" + start.toString(16) + ": lookup type 6 format must be 1, 2 or 3.");
+};
+subtableParsers[7] = function parseLookup7() {
+  var substFormat = this.parseUShort();
+  check.argument(substFormat === 1, "GSUB Extension Substitution subtable identifier-format must be 1");
+  var extensionLookupType = this.parseUShort();
+  var extensionParser = new Parser(this.data, this.offset + this.parseULong());
+  return {
+    substFormat: 1,
+    lookupType: extensionLookupType,
+    extension: subtableParsers[extensionLookupType].call(extensionParser)
+  };
+};
+subtableParsers[8] = function parseLookup8() {
+  var substFormat = this.parseUShort();
+  check.argument(substFormat === 1, "GSUB Reverse Chaining Contextual Single Substitution Subtable identifier-format must be 1");
+  return {
+    substFormat,
+    coverage: this.parsePointer(Parser.coverage),
+    backtrackCoverage: this.parseList(Parser.pointer(Parser.coverage)),
+    lookaheadCoverage: this.parseList(Parser.pointer(Parser.coverage)),
+    substitutes: this.parseUShortList()
+  };
+};
 function parseGsubTable(data, start) {
   start = start || 0;
   var p = new Parser(data, start);
@@ -2487,6 +6398,95 @@ function parseGsubTable(data, start) {
     };
   }
 }
+var subtableMakers = new Array(9);
+subtableMakers[1] = function makeLookup1(subtable) {
+  if (subtable.substFormat === 1) {
+    return new table.Table("substitutionTable", [
+      { name: "substFormat", type: "USHORT", value: 1 },
+      { name: "coverage", type: "TABLE", value: new table.Coverage(subtable.coverage) },
+      { name: "deltaGlyphID", type: "USHORT", value: subtable.deltaGlyphId }
+    ]);
+  } else {
+    return new table.Table("substitutionTable", [
+      { name: "substFormat", type: "USHORT", value: 2 },
+      { name: "coverage", type: "TABLE", value: new table.Coverage(subtable.coverage) }
+    ].concat(table.ushortList("substitute", subtable.substitute)));
+  }
+};
+subtableMakers[2] = function makeLookup2(subtable) {
+  check.assert(subtable.substFormat === 1, "Lookup type 2 substFormat must be 1.");
+  return new table.Table("substitutionTable", [
+    { name: "substFormat", type: "USHORT", value: 1 },
+    { name: "coverage", type: "TABLE", value: new table.Coverage(subtable.coverage) }
+  ].concat(table.tableList("seqSet", subtable.sequences, function(sequenceSet) {
+    return new table.Table("sequenceSetTable", table.ushortList("sequence", sequenceSet));
+  })));
+};
+subtableMakers[3] = function makeLookup3(subtable) {
+  check.assert(subtable.substFormat === 1, "Lookup type 3 substFormat must be 1.");
+  return new table.Table("substitutionTable", [
+    { name: "substFormat", type: "USHORT", value: 1 },
+    { name: "coverage", type: "TABLE", value: new table.Coverage(subtable.coverage) }
+  ].concat(table.tableList("altSet", subtable.alternateSets, function(alternateSet) {
+    return new table.Table("alternateSetTable", table.ushortList("alternate", alternateSet));
+  })));
+};
+subtableMakers[4] = function makeLookup4(subtable) {
+  check.assert(subtable.substFormat === 1, "Lookup type 4 substFormat must be 1.");
+  return new table.Table("substitutionTable", [
+    { name: "substFormat", type: "USHORT", value: 1 },
+    { name: "coverage", type: "TABLE", value: new table.Coverage(subtable.coverage) }
+  ].concat(table.tableList("ligSet", subtable.ligatureSets, function(ligatureSet) {
+    return new table.Table("ligatureSetTable", table.tableList("ligature", ligatureSet, function(ligature) {
+      return new table.Table(
+        "ligatureTable",
+        [{ name: "ligGlyph", type: "USHORT", value: ligature.ligGlyph }].concat(table.ushortList("component", ligature.components, ligature.components.length + 1))
+      );
+    }));
+  })));
+};
+subtableMakers[6] = function makeLookup6(subtable) {
+  if (subtable.substFormat === 1) {
+    var returnTable = new table.Table("chainContextTable", [
+      { name: "substFormat", type: "USHORT", value: subtable.substFormat },
+      { name: "coverage", type: "TABLE", value: new table.Coverage(subtable.coverage) }
+    ].concat(table.tableList("chainRuleSet", subtable.chainRuleSets, function(chainRuleSet) {
+      return new table.Table("chainRuleSetTable", table.tableList("chainRule", chainRuleSet, function(chainRule) {
+        var tableData2 = table.ushortList("backtrackGlyph", chainRule.backtrack, chainRule.backtrack.length).concat(table.ushortList("inputGlyph", chainRule.input, chainRule.input.length + 1)).concat(table.ushortList("lookaheadGlyph", chainRule.lookahead, chainRule.lookahead.length)).concat(table.ushortList("substitution", [], chainRule.lookupRecords.length));
+        chainRule.lookupRecords.forEach(function(record, i) {
+          tableData2 = tableData2.concat({ name: "sequenceIndex" + i, type: "USHORT", value: record.sequenceIndex }).concat({ name: "lookupListIndex" + i, type: "USHORT", value: record.lookupListIndex });
+        });
+        return new table.Table("chainRuleTable", tableData2);
+      }));
+    })));
+    return returnTable;
+  } else if (subtable.substFormat === 2) {
+    check.assert(false, "lookup type 6 format 2 is not yet supported.");
+  } else if (subtable.substFormat === 3) {
+    var tableData = [
+      { name: "substFormat", type: "USHORT", value: subtable.substFormat }
+    ];
+    tableData.push({ name: "backtrackGlyphCount", type: "USHORT", value: subtable.backtrackCoverage.length });
+    subtable.backtrackCoverage.forEach(function(coverage, i) {
+      tableData.push({ name: "backtrackCoverage" + i, type: "TABLE", value: new table.Coverage(coverage) });
+    });
+    tableData.push({ name: "inputGlyphCount", type: "USHORT", value: subtable.inputCoverage.length });
+    subtable.inputCoverage.forEach(function(coverage, i) {
+      tableData.push({ name: "inputCoverage" + i, type: "TABLE", value: new table.Coverage(coverage) });
+    });
+    tableData.push({ name: "lookaheadGlyphCount", type: "USHORT", value: subtable.lookaheadCoverage.length });
+    subtable.lookaheadCoverage.forEach(function(coverage, i) {
+      tableData.push({ name: "lookaheadCoverage" + i, type: "TABLE", value: new table.Coverage(coverage) });
+    });
+    tableData.push({ name: "substitutionCount", type: "USHORT", value: subtable.lookupRecords.length });
+    subtable.lookupRecords.forEach(function(record, i) {
+      tableData = tableData.concat({ name: "sequenceIndex" + i, type: "USHORT", value: record.sequenceIndex }).concat({ name: "lookupListIndex" + i, type: "USHORT", value: record.lookupListIndex });
+    });
+    var returnTable$1 = new table.Table("chainContextTable", tableData);
+    return returnTable$1;
+  }
+  check.assert(false, "lookup type 6 format must be 1, 2 or 3.");
+};
 function makeGsubTable(gsub2) {
   return new table.Table("GSUB", [
     { name: "version", type: "ULONG", value: 65536 },
@@ -2495,6 +6495,7 @@ function makeGsubTable(gsub2) {
     { name: "lookups", type: "TABLE", value: new table.LookupList(gsub2.lookups, subtableMakers) }
   ]);
 }
+var gsub = { parse: parseGsubTable, make: makeGsubTable };
 function parseMetaTable(data, start) {
   var p = new parse.Parser(data, start);
   var tableVersion = p.parseULong();
@@ -2532,6 +6533,7 @@ function makeMetaTable(tags) {
   result.fields.push({ name: "stringPool", type: "CHARARRAY", value: stringPool });
   return result;
 }
+var meta = { parse: parseMetaTable, make: makeMetaTable };
 function log2(v) {
   return Math.log(v) / Math.log(2) | 0;
 }
@@ -2795,6 +6797,7 @@ function fontToSfntTable(font) {
   }
   return sfntTable;
 }
+var sfnt = { make: makeSfntTable, fontToTable: fontToSfntTable, computeCheckSum };
 function searchTag(arr, tag) {
   var imin = 0;
   var imax = arr.length - 1;
@@ -2855,9 +6858,310 @@ function Layout(font, tableName) {
   this.font = font;
   this.tableName = tableName;
 }
+Layout.prototype = {
+  /**
+   * Binary search an object by "tag" property
+   * @instance
+   * @function searchTag
+   * @memberof opentype.Layout
+   * @param  {Array} arr
+   * @param  {string} tag
+   * @return {number}
+   */
+  searchTag,
+  /**
+   * Binary search in a list of numbers
+   * @instance
+   * @function binSearch
+   * @memberof opentype.Layout
+   * @param  {Array} arr
+   * @param  {number} value
+   * @return {number}
+   */
+  binSearch,
+  /**
+   * Get or create the Layout table (GSUB, GPOS etc).
+   * @param  {boolean} create - Whether to create a new one.
+   * @return {Object} The GSUB or GPOS table.
+   */
+  getTable: function(create) {
+    var layout = this.font.tables[this.tableName];
+    if (!layout && create) {
+      layout = this.font.tables[this.tableName] = this.createDefaultTable();
+    }
+    return layout;
+  },
+  /**
+   * Returns all scripts in the substitution table.
+   * @instance
+   * @return {Array}
+   */
+  getScriptNames: function() {
+    var layout = this.getTable();
+    if (!layout) {
+      return [];
+    }
+    return layout.scripts.map(function(script) {
+      return script.tag;
+    });
+  },
+  /**
+   * Returns the best bet for a script name.
+   * Returns 'DFLT' if it exists.
+   * If not, returns 'latn' if it exists.
+   * If neither exist, returns undefined.
+   */
+  getDefaultScriptName: function() {
+    var layout = this.getTable();
+    if (!layout) {
+      return;
+    }
+    var hasLatn = false;
+    for (var i = 0; i < layout.scripts.length; i++) {
+      var name = layout.scripts[i].tag;
+      if (name === "DFLT") {
+        return name;
+      }
+      if (name === "latn") {
+        hasLatn = true;
+      }
+    }
+    if (hasLatn) {
+      return "latn";
+    }
+  },
+  /**
+   * Returns all LangSysRecords in the given script.
+   * @instance
+   * @param {string} [script='DFLT']
+   * @param {boolean} create - forces the creation of this script table if it doesn't exist.
+   * @return {Object} An object with tag and script properties.
+   */
+  getScriptTable: function(script, create) {
+    var layout = this.getTable(create);
+    if (layout) {
+      script = script || "DFLT";
+      var scripts = layout.scripts;
+      var pos = searchTag(layout.scripts, script);
+      if (pos >= 0) {
+        return scripts[pos].script;
+      } else if (create) {
+        var scr = {
+          tag: script,
+          script: {
+            defaultLangSys: { reserved: 0, reqFeatureIndex: 65535, featureIndexes: [] },
+            langSysRecords: []
+          }
+        };
+        scripts.splice(-1 - pos, 0, scr);
+        return scr.script;
+      }
+    }
+  },
+  /**
+   * Returns a language system table
+   * @instance
+   * @param {string} [script='DFLT']
+   * @param {string} [language='dlft']
+   * @param {boolean} create - forces the creation of this langSysTable if it doesn't exist.
+   * @return {Object}
+   */
+  getLangSysTable: function(script, language, create) {
+    var scriptTable = this.getScriptTable(script, create);
+    if (scriptTable) {
+      if (!language || language === "dflt" || language === "DFLT") {
+        return scriptTable.defaultLangSys;
+      }
+      var pos = searchTag(scriptTable.langSysRecords, language);
+      if (pos >= 0) {
+        return scriptTable.langSysRecords[pos].langSys;
+      } else if (create) {
+        var langSysRecord = {
+          tag: language,
+          langSys: { reserved: 0, reqFeatureIndex: 65535, featureIndexes: [] }
+        };
+        scriptTable.langSysRecords.splice(-1 - pos, 0, langSysRecord);
+        return langSysRecord.langSys;
+      }
+    }
+  },
+  /**
+   * Get a specific feature table.
+   * @instance
+   * @param {string} [script='DFLT']
+   * @param {string} [language='dlft']
+   * @param {string} feature - One of the codes listed at https://www.microsoft.com/typography/OTSPEC/featurelist.htm
+   * @param {boolean} create - forces the creation of the feature table if it doesn't exist.
+   * @return {Object}
+   */
+  getFeatureTable: function(script, language, feature, create) {
+    var langSysTable2 = this.getLangSysTable(script, language, create);
+    if (langSysTable2) {
+      var featureRecord;
+      var featIndexes = langSysTable2.featureIndexes;
+      var allFeatures = this.font.tables[this.tableName].features;
+      for (var i = 0; i < featIndexes.length; i++) {
+        featureRecord = allFeatures[featIndexes[i]];
+        if (featureRecord.tag === feature) {
+          return featureRecord.feature;
+        }
+      }
+      if (create) {
+        var index = allFeatures.length;
+        check.assert(index === 0 || feature >= allFeatures[index - 1].tag, "Features must be added in alphabetical order.");
+        featureRecord = {
+          tag: feature,
+          feature: { params: 0, lookupListIndexes: [] }
+        };
+        allFeatures.push(featureRecord);
+        featIndexes.push(index);
+        return featureRecord.feature;
+      }
+    }
+  },
+  /**
+   * Get the lookup tables of a given type for a script/language/feature.
+   * @instance
+   * @param {string} [script='DFLT']
+   * @param {string} [language='dlft']
+   * @param {string} feature - 4-letter feature code
+   * @param {number} lookupType - 1 to 9
+   * @param {boolean} create - forces the creation of the lookup table if it doesn't exist, with no subtables.
+   * @return {Object[]}
+   */
+  getLookupTables: function(script, language, feature, lookupType, create) {
+    var featureTable = this.getFeatureTable(script, language, feature, create);
+    var tables = [];
+    if (featureTable) {
+      var lookupTable;
+      var lookupListIndexes = featureTable.lookupListIndexes;
+      var allLookups = this.font.tables[this.tableName].lookups;
+      for (var i = 0; i < lookupListIndexes.length; i++) {
+        lookupTable = allLookups[lookupListIndexes[i]];
+        if (lookupTable.lookupType === lookupType) {
+          tables.push(lookupTable);
+        }
+      }
+      if (tables.length === 0 && create) {
+        lookupTable = {
+          lookupType,
+          lookupFlag: 0,
+          subtables: [],
+          markFilteringSet: void 0
+        };
+        var index = allLookups.length;
+        allLookups.push(lookupTable);
+        lookupListIndexes.push(index);
+        return [lookupTable];
+      }
+    }
+    return tables;
+  },
+  /**
+   * Find a glyph in a class definition table
+   * https://docs.microsoft.com/en-us/typography/opentype/spec/chapter2#class-definition-table
+   * @param {object} classDefTable - an OpenType Layout class definition table
+   * @param {number} glyphIndex - the index of the glyph to find
+   * @returns {number} -1 if not found
+   */
+  getGlyphClass: function(classDefTable, glyphIndex) {
+    switch (classDefTable.format) {
+      case 1:
+        if (classDefTable.startGlyph <= glyphIndex && glyphIndex < classDefTable.startGlyph + classDefTable.classes.length) {
+          return classDefTable.classes[glyphIndex - classDefTable.startGlyph];
+        }
+        return 0;
+      case 2:
+        var range = searchRange(classDefTable.ranges, glyphIndex);
+        return range ? range.classId : 0;
+    }
+  },
+  /**
+   * Find a glyph in a coverage table
+   * https://docs.microsoft.com/en-us/typography/opentype/spec/chapter2#coverage-table
+   * @param {object} coverageTable - an OpenType Layout coverage table
+   * @param {number} glyphIndex - the index of the glyph to find
+   * @returns {number} -1 if not found
+   */
+  getCoverageIndex: function(coverageTable, glyphIndex) {
+    switch (coverageTable.format) {
+      case 1:
+        var index = binSearch(coverageTable.glyphs, glyphIndex);
+        return index >= 0 ? index : -1;
+      case 2:
+        var range = searchRange(coverageTable.ranges, glyphIndex);
+        return range ? range.index + glyphIndex - range.start : -1;
+    }
+  },
+  /**
+   * Returns the list of glyph indexes of a coverage table.
+   * Format 1: the list is stored raw
+   * Format 2: compact list as range records.
+   * @instance
+   * @param  {Object} coverageTable
+   * @return {Array}
+   */
+  expandCoverage: function(coverageTable) {
+    if (coverageTable.format === 1) {
+      return coverageTable.glyphs;
+    } else {
+      var glyphs = [];
+      var ranges = coverageTable.ranges;
+      for (var i = 0; i < ranges.length; i++) {
+        var range = ranges[i];
+        var start = range.start;
+        var end = range.end;
+        for (var j = start; j <= end; j++) {
+          glyphs.push(j);
+        }
+      }
+      return glyphs;
+    }
+  }
+};
 function Position(font) {
   Layout.call(this, font, "gpos");
 }
+Position.prototype = Layout.prototype;
+Position.prototype.init = function() {
+  var script = this.getDefaultScriptName();
+  this.defaultKerningTables = this.getKerningTables(script);
+};
+Position.prototype.getKerningValue = function(kerningLookups, leftIndex, rightIndex) {
+  for (var i = 0; i < kerningLookups.length; i++) {
+    var subtables = kerningLookups[i].subtables;
+    for (var j = 0; j < subtables.length; j++) {
+      var subtable = subtables[j];
+      var covIndex = this.getCoverageIndex(subtable.coverage, leftIndex);
+      if (covIndex < 0) {
+        continue;
+      }
+      switch (subtable.posFormat) {
+        case 1:
+          var pairSet = subtable.pairSets[covIndex];
+          for (var k = 0; k < pairSet.length; k++) {
+            var pair = pairSet[k];
+            if (pair.secondGlyph === rightIndex) {
+              return pair.value1 && pair.value1.xAdvance || 0;
+            }
+          }
+          break;
+        // left glyph found, not right glyph - try next subtable
+        case 2:
+          var class1 = this.getGlyphClass(subtable.classDef1, leftIndex);
+          var class2 = this.getGlyphClass(subtable.classDef2, rightIndex);
+          var pair$1 = subtable.classRecords[class1][class2];
+          return pair$1.value1 && pair$1.value1.xAdvance || 0;
+      }
+    }
+  }
+  return 0;
+};
+Position.prototype.getKerningTables = function(script, language) {
+  if (this.font.tables.gpos) {
+    return this.getLookupTables(script, language, "kern", 2);
+  }
+};
 function Substitution(font) {
   Layout.call(this, font, "gsub");
 }
@@ -2887,6 +7191,235 @@ function getSubstFormat(lookupTable, format, defaultSubtable) {
   }
   return void 0;
 }
+Substitution.prototype = Layout.prototype;
+Substitution.prototype.createDefaultTable = function() {
+  return {
+    version: 1,
+    scripts: [{
+      tag: "DFLT",
+      script: {
+        defaultLangSys: { reserved: 0, reqFeatureIndex: 65535, featureIndexes: [] },
+        langSysRecords: []
+      }
+    }],
+    features: [],
+    lookups: []
+  };
+};
+Substitution.prototype.getSingle = function(feature, script, language) {
+  var substitutions = [];
+  var lookupTables = this.getLookupTables(script, language, feature, 1);
+  for (var idx = 0; idx < lookupTables.length; idx++) {
+    var subtables = lookupTables[idx].subtables;
+    for (var i = 0; i < subtables.length; i++) {
+      var subtable = subtables[i];
+      var glyphs = this.expandCoverage(subtable.coverage);
+      var j = void 0;
+      if (subtable.substFormat === 1) {
+        var delta = subtable.deltaGlyphId;
+        for (j = 0; j < glyphs.length; j++) {
+          var glyph = glyphs[j];
+          substitutions.push({ sub: glyph, by: glyph + delta });
+        }
+      } else {
+        var substitute = subtable.substitute;
+        for (j = 0; j < glyphs.length; j++) {
+          substitutions.push({ sub: glyphs[j], by: substitute[j] });
+        }
+      }
+    }
+  }
+  return substitutions;
+};
+Substitution.prototype.getMultiple = function(feature, script, language) {
+  var substitutions = [];
+  var lookupTables = this.getLookupTables(script, language, feature, 2);
+  for (var idx = 0; idx < lookupTables.length; idx++) {
+    var subtables = lookupTables[idx].subtables;
+    for (var i = 0; i < subtables.length; i++) {
+      var subtable = subtables[i];
+      var glyphs = this.expandCoverage(subtable.coverage);
+      var j = void 0;
+      for (j = 0; j < glyphs.length; j++) {
+        var glyph = glyphs[j];
+        var replacements = subtable.sequences[j];
+        substitutions.push({ sub: glyph, by: replacements });
+      }
+    }
+  }
+  return substitutions;
+};
+Substitution.prototype.getAlternates = function(feature, script, language) {
+  var alternates = [];
+  var lookupTables = this.getLookupTables(script, language, feature, 3);
+  for (var idx = 0; idx < lookupTables.length; idx++) {
+    var subtables = lookupTables[idx].subtables;
+    for (var i = 0; i < subtables.length; i++) {
+      var subtable = subtables[i];
+      var glyphs = this.expandCoverage(subtable.coverage);
+      var alternateSets = subtable.alternateSets;
+      for (var j = 0; j < glyphs.length; j++) {
+        alternates.push({ sub: glyphs[j], by: alternateSets[j] });
+      }
+    }
+  }
+  return alternates;
+};
+Substitution.prototype.getLigatures = function(feature, script, language) {
+  var ligatures = [];
+  var lookupTables = this.getLookupTables(script, language, feature, 4);
+  for (var idx = 0; idx < lookupTables.length; idx++) {
+    var subtables = lookupTables[idx].subtables;
+    for (var i = 0; i < subtables.length; i++) {
+      var subtable = subtables[i];
+      var glyphs = this.expandCoverage(subtable.coverage);
+      var ligatureSets = subtable.ligatureSets;
+      for (var j = 0; j < glyphs.length; j++) {
+        var startGlyph = glyphs[j];
+        var ligSet = ligatureSets[j];
+        for (var k = 0; k < ligSet.length; k++) {
+          var lig = ligSet[k];
+          ligatures.push({
+            sub: [startGlyph].concat(lig.components),
+            by: lig.ligGlyph
+          });
+        }
+      }
+    }
+  }
+  return ligatures;
+};
+Substitution.prototype.addSingle = function(feature, substitution, script, language) {
+  var lookupTable = this.getLookupTables(script, language, feature, 1, true)[0];
+  var subtable = getSubstFormat(lookupTable, 2, {
+    // lookup type 1 subtable, format 2, coverage format 1
+    substFormat: 2,
+    coverage: { format: 1, glyphs: [] },
+    substitute: []
+  });
+  check.assert(subtable.coverage.format === 1, "Single: unable to modify coverage table format " + subtable.coverage.format);
+  var coverageGlyph = substitution.sub;
+  var pos = this.binSearch(subtable.coverage.glyphs, coverageGlyph);
+  if (pos < 0) {
+    pos = -1 - pos;
+    subtable.coverage.glyphs.splice(pos, 0, coverageGlyph);
+    subtable.substitute.splice(pos, 0, 0);
+  }
+  subtable.substitute[pos] = substitution.by;
+};
+Substitution.prototype.addMultiple = function(feature, substitution, script, language) {
+  check.assert(substitution.by instanceof Array && substitution.by.length > 1, 'Multiple: "by" must be an array of two or more ids');
+  var lookupTable = this.getLookupTables(script, language, feature, 2, true)[0];
+  var subtable = getSubstFormat(lookupTable, 1, {
+    // lookup type 2 subtable, format 1, coverage format 1
+    substFormat: 1,
+    coverage: { format: 1, glyphs: [] },
+    sequences: []
+  });
+  check.assert(subtable.coverage.format === 1, "Multiple: unable to modify coverage table format " + subtable.coverage.format);
+  var coverageGlyph = substitution.sub;
+  var pos = this.binSearch(subtable.coverage.glyphs, coverageGlyph);
+  if (pos < 0) {
+    pos = -1 - pos;
+    subtable.coverage.glyphs.splice(pos, 0, coverageGlyph);
+    subtable.sequences.splice(pos, 0, 0);
+  }
+  subtable.sequences[pos] = substitution.by;
+};
+Substitution.prototype.addAlternate = function(feature, substitution, script, language) {
+  var lookupTable = this.getLookupTables(script, language, feature, 3, true)[0];
+  var subtable = getSubstFormat(lookupTable, 1, {
+    // lookup type 3 subtable, format 1, coverage format 1
+    substFormat: 1,
+    coverage: { format: 1, glyphs: [] },
+    alternateSets: []
+  });
+  check.assert(subtable.coverage.format === 1, "Alternate: unable to modify coverage table format " + subtable.coverage.format);
+  var coverageGlyph = substitution.sub;
+  var pos = this.binSearch(subtable.coverage.glyphs, coverageGlyph);
+  if (pos < 0) {
+    pos = -1 - pos;
+    subtable.coverage.glyphs.splice(pos, 0, coverageGlyph);
+    subtable.alternateSets.splice(pos, 0, 0);
+  }
+  subtable.alternateSets[pos] = substitution.by;
+};
+Substitution.prototype.addLigature = function(feature, ligature, script, language) {
+  var lookupTable = this.getLookupTables(script, language, feature, 4, true)[0];
+  var subtable = lookupTable.subtables[0];
+  if (!subtable) {
+    subtable = {
+      // lookup type 4 subtable, format 1, coverage format 1
+      substFormat: 1,
+      coverage: { format: 1, glyphs: [] },
+      ligatureSets: []
+    };
+    lookupTable.subtables[0] = subtable;
+  }
+  check.assert(subtable.coverage.format === 1, "Ligature: unable to modify coverage table format " + subtable.coverage.format);
+  var coverageGlyph = ligature.sub[0];
+  var ligComponents = ligature.sub.slice(1);
+  var ligatureTable = {
+    ligGlyph: ligature.by,
+    components: ligComponents
+  };
+  var pos = this.binSearch(subtable.coverage.glyphs, coverageGlyph);
+  if (pos >= 0) {
+    var ligatureSet = subtable.ligatureSets[pos];
+    for (var i = 0; i < ligatureSet.length; i++) {
+      if (arraysEqual(ligatureSet[i].components, ligComponents)) {
+        return;
+      }
+    }
+    ligatureSet.push(ligatureTable);
+  } else {
+    pos = -1 - pos;
+    subtable.coverage.glyphs.splice(pos, 0, coverageGlyph);
+    subtable.ligatureSets.splice(pos, 0, [ligatureTable]);
+  }
+};
+Substitution.prototype.getFeature = function(feature, script, language) {
+  if (/ss\d\d/.test(feature)) {
+    return this.getSingle(feature, script, language);
+  }
+  switch (feature) {
+    case "aalt":
+    case "salt":
+      return this.getSingle(feature, script, language).concat(this.getAlternates(feature, script, language));
+    case "dlig":
+    case "liga":
+    case "rlig":
+      return this.getLigatures(feature, script, language);
+    case "ccmp":
+      return this.getMultiple(feature, script, language).concat(this.getLigatures(feature, script, language));
+    case "stch":
+      return this.getMultiple(feature, script, language);
+  }
+  return void 0;
+};
+Substitution.prototype.add = function(feature, sub, script, language) {
+  if (/ss\d\d/.test(feature)) {
+    return this.addSingle(feature, sub, script, language);
+  }
+  switch (feature) {
+    case "aalt":
+    case "salt":
+      if (typeof sub.by === "number") {
+        return this.addSingle(feature, sub, script, language);
+      }
+      return this.addAlternate(feature, sub, script, language);
+    case "dlig":
+    case "liga":
+    case "rlig":
+      return this.addLigature(feature, sub, script, language);
+    case "ccmp":
+      if (sub.by instanceof Array) {
+        return this.addMultiple(feature, sub, script, language);
+      }
+      return this.addLigature(feature, sub, script, language);
+  }
+  return void 0;
+};
 function isBrowser() {
   return typeof window !== "undefined";
 }
@@ -3186,6 +7719,11 @@ function parseGlyfTable(data, start, loca2, font, opt) {
     return parseGlyfTableAll(data, start, loca2, font);
   }
 }
+var glyf = { getPath, parse: parseGlyfTable };
+var instructionTable;
+var exec;
+var execGlyph;
+var execComponent;
 function Hinting(font) {
   this.font = font;
   this.getCommands = function(hPoints) {
@@ -3212,6 +7750,201 @@ function roundUpToGrid(v) {
 function roundDownToGrid(v) {
   return Math.sign(v) * Math.floor(Math.abs(v));
 }
+var roundSuper = function(v) {
+  var period = this.srPeriod;
+  var phase = this.srPhase;
+  var threshold = this.srThreshold;
+  var sign2 = 1;
+  if (v < 0) {
+    v = -v;
+    sign2 = -1;
+  }
+  v += threshold - phase;
+  v = Math.trunc(v / period) * period;
+  v += phase;
+  if (v < 0) {
+    return phase * sign2;
+  }
+  return v * sign2;
+};
+var xUnitVector = {
+  x: 1,
+  y: 0,
+  axis: "x",
+  // Gets the projected distance between two points.
+  // o1/o2 ... if true, respective original position is used.
+  distance: function(p1, p2, o1, o2) {
+    return (o1 ? p1.xo : p1.x) - (o2 ? p2.xo : p2.x);
+  },
+  // Moves point p so the moved position has the same relative
+  // position to the moved positions of rp1 and rp2 than the
+  // original positions had.
+  //
+  // See APPENDIX on INTERPOLATE at the bottom of this file.
+  interpolate: function(p, rp1, rp2, pv) {
+    var do1;
+    var do2;
+    var doa1;
+    var doa2;
+    var dm1;
+    var dm2;
+    var dt;
+    if (!pv || pv === this) {
+      do1 = p.xo - rp1.xo;
+      do2 = p.xo - rp2.xo;
+      dm1 = rp1.x - rp1.xo;
+      dm2 = rp2.x - rp2.xo;
+      doa1 = Math.abs(do1);
+      doa2 = Math.abs(do2);
+      dt = doa1 + doa2;
+      if (dt === 0) {
+        p.x = p.xo + (dm1 + dm2) / 2;
+        return;
+      }
+      p.x = p.xo + (dm1 * doa2 + dm2 * doa1) / dt;
+      return;
+    }
+    do1 = pv.distance(p, rp1, true, true);
+    do2 = pv.distance(p, rp2, true, true);
+    dm1 = pv.distance(rp1, rp1, false, true);
+    dm2 = pv.distance(rp2, rp2, false, true);
+    doa1 = Math.abs(do1);
+    doa2 = Math.abs(do2);
+    dt = doa1 + doa2;
+    if (dt === 0) {
+      xUnitVector.setRelative(p, p, (dm1 + dm2) / 2, pv, true);
+      return;
+    }
+    xUnitVector.setRelative(p, p, (dm1 * doa2 + dm2 * doa1) / dt, pv, true);
+  },
+  // Slope of line normal to this
+  normalSlope: Number.NEGATIVE_INFINITY,
+  // Sets the point 'p' relative to point 'rp'
+  // by the distance 'd'.
+  //
+  // See APPENDIX on SETRELATIVE at the bottom of this file.
+  //
+  // p   ... point to set
+  // rp  ... reference point
+  // d   ... distance on projection vector
+  // pv  ... projection vector (undefined = this)
+  // org ... if true, uses the original position of rp as reference.
+  setRelative: function(p, rp, d, pv, org) {
+    if (!pv || pv === this) {
+      p.x = (org ? rp.xo : rp.x) + d;
+      return;
+    }
+    var rpx = org ? rp.xo : rp.x;
+    var rpy = org ? rp.yo : rp.y;
+    var rpdx = rpx + d * pv.x;
+    var rpdy = rpy + d * pv.y;
+    p.x = rpdx + (p.y - rpdy) / pv.normalSlope;
+  },
+  // Slope of vector line.
+  slope: 0,
+  // Touches the point p.
+  touch: function(p) {
+    p.xTouched = true;
+  },
+  // Tests if a point p is touched.
+  touched: function(p) {
+    return p.xTouched;
+  },
+  // Untouches the point p.
+  untouch: function(p) {
+    p.xTouched = false;
+  }
+};
+var yUnitVector = {
+  x: 0,
+  y: 1,
+  axis: "y",
+  // Gets the projected distance between two points.
+  // o1/o2 ... if true, respective original position is used.
+  distance: function(p1, p2, o1, o2) {
+    return (o1 ? p1.yo : p1.y) - (o2 ? p2.yo : p2.y);
+  },
+  // Moves point p so the moved position has the same relative
+  // position to the moved positions of rp1 and rp2 than the
+  // original positions had.
+  //
+  // See APPENDIX on INTERPOLATE at the bottom of this file.
+  interpolate: function(p, rp1, rp2, pv) {
+    var do1;
+    var do2;
+    var doa1;
+    var doa2;
+    var dm1;
+    var dm2;
+    var dt;
+    if (!pv || pv === this) {
+      do1 = p.yo - rp1.yo;
+      do2 = p.yo - rp2.yo;
+      dm1 = rp1.y - rp1.yo;
+      dm2 = rp2.y - rp2.yo;
+      doa1 = Math.abs(do1);
+      doa2 = Math.abs(do2);
+      dt = doa1 + doa2;
+      if (dt === 0) {
+        p.y = p.yo + (dm1 + dm2) / 2;
+        return;
+      }
+      p.y = p.yo + (dm1 * doa2 + dm2 * doa1) / dt;
+      return;
+    }
+    do1 = pv.distance(p, rp1, true, true);
+    do2 = pv.distance(p, rp2, true, true);
+    dm1 = pv.distance(rp1, rp1, false, true);
+    dm2 = pv.distance(rp2, rp2, false, true);
+    doa1 = Math.abs(do1);
+    doa2 = Math.abs(do2);
+    dt = doa1 + doa2;
+    if (dt === 0) {
+      yUnitVector.setRelative(p, p, (dm1 + dm2) / 2, pv, true);
+      return;
+    }
+    yUnitVector.setRelative(p, p, (dm1 * doa2 + dm2 * doa1) / dt, pv, true);
+  },
+  // Slope of line normal to this.
+  normalSlope: 0,
+  // Sets the point 'p' relative to point 'rp'
+  // by the distance 'd'
+  //
+  // See APPENDIX on SETRELATIVE at the bottom of this file.
+  //
+  // p   ... point to set
+  // rp  ... reference point
+  // d   ... distance on projection vector
+  // pv  ... projection vector (undefined = this)
+  // org ... if true, uses the original position of rp as reference.
+  setRelative: function(p, rp, d, pv, org) {
+    if (!pv || pv === this) {
+      p.y = (org ? rp.yo : rp.y) + d;
+      return;
+    }
+    var rpx = org ? rp.xo : rp.x;
+    var rpy = org ? rp.yo : rp.y;
+    var rpdx = rpx + d * pv.x;
+    var rpdy = rpy + d * pv.y;
+    p.y = rpdy + pv.normalSlope * (p.x - rpdx);
+  },
+  // Slope of vector line.
+  slope: Number.POSITIVE_INFINITY,
+  // Touches the point p.
+  touch: function(p) {
+    p.yTouched = true;
+  },
+  // Tests if a point p is touched.
+  touched: function(p) {
+    return p.yTouched;
+  },
+  // Untouches the point p.
+  untouch: function(p) {
+    p.yTouched = false;
+  }
+};
+Object.freeze(xUnitVector);
+Object.freeze(yUnitVector);
 function UnitVector(x, y) {
   this.x = x;
   this.y = y;
@@ -3220,6 +7953,47 @@ function UnitVector(x, y) {
   this.normalSlope = -x / y;
   Object.freeze(this);
 }
+UnitVector.prototype.distance = function(p1, p2, o1, o2) {
+  return this.x * xUnitVector.distance(p1, p2, o1, o2) + this.y * yUnitVector.distance(p1, p2, o1, o2);
+};
+UnitVector.prototype.interpolate = function(p, rp1, rp2, pv) {
+  var dm1;
+  var dm2;
+  var do1;
+  var do2;
+  var doa1;
+  var doa2;
+  var dt;
+  do1 = pv.distance(p, rp1, true, true);
+  do2 = pv.distance(p, rp2, true, true);
+  dm1 = pv.distance(rp1, rp1, false, true);
+  dm2 = pv.distance(rp2, rp2, false, true);
+  doa1 = Math.abs(do1);
+  doa2 = Math.abs(do2);
+  dt = doa1 + doa2;
+  if (dt === 0) {
+    this.setRelative(p, p, (dm1 + dm2) / 2, pv, true);
+    return;
+  }
+  this.setRelative(p, p, (dm1 * doa2 + dm2 * doa1) / dt, pv, true);
+};
+UnitVector.prototype.setRelative = function(p, rp, d, pv, org) {
+  pv = pv || this;
+  var rpx = org ? rp.xo : rp.x;
+  var rpy = org ? rp.yo : rp.y;
+  var rpdx = rpx + d * pv.x;
+  var rpdy = rpy + d * pv.y;
+  var pvns = pv.normalSlope;
+  var fvs = this.slope;
+  var px = p.x;
+  var py = p.y;
+  p.x = (fvs * px - pvns * rpdx + rpdy - py) / (fvs - pvns);
+  p.y = fvs * (p.x - px) + py;
+};
+UnitVector.prototype.touch = function(p) {
+  p.xTouched = true;
+  p.yTouched = true;
+};
 function getUnitVector(x, y) {
   var d = Math.sqrt(x * x + y * y);
   x /= d;
@@ -3243,6 +8017,32 @@ function HPoint(x, y, lastPointOfContour, onCurve) {
   this.yTouched = false;
   Object.preventExtensions(this);
 }
+HPoint.prototype.nextTouched = function(v) {
+  var p = this.nextPointOnContour;
+  while (!v.touched(p) && p !== this) {
+    p = p.nextPointOnContour;
+  }
+  return p;
+};
+HPoint.prototype.prevTouched = function(v) {
+  var p = this.prevPointOnContour;
+  while (!v.touched(p) && p !== this) {
+    p = p.prevPointOnContour;
+  }
+  return p;
+};
+var HPZero = Object.freeze(new HPoint(0, 0));
+var defaultState = {
+  cvCutIn: 17 / 16,
+  // control value cut in
+  deltaBase: 9,
+  deltaShift: 0.125,
+  loop: 1,
+  // loops some instructions
+  minDis: 1,
+  // minimum distance
+  autoFlip: true
+};
 function State(env, prog) {
   this.env = env;
   this.stack = [];
@@ -3257,6 +8057,212 @@ function State(env, prog) {
       this.round = roundToGrid;
   }
 }
+Hinting.prototype.exec = function(glyph, ppem) {
+  if (typeof ppem !== "number") {
+    throw new Error("Point size is not a number!");
+  }
+  if (this._errorState > 2) {
+    return;
+  }
+  var font = this.font;
+  var prepState = this._prepState;
+  if (!prepState || prepState.ppem !== ppem) {
+    var fpgmState = this._fpgmState;
+    if (!fpgmState) {
+      State.prototype = defaultState;
+      fpgmState = this._fpgmState = new State("fpgm", font.tables.fpgm);
+      fpgmState.funcs = [];
+      fpgmState.font = font;
+      if (exports.DEBUG) {
+        console.log("---EXEC FPGM---");
+        fpgmState.step = -1;
+      }
+      try {
+        exec(fpgmState);
+      } catch (e) {
+        console.log("Hinting error in FPGM:" + e);
+        this._errorState = 3;
+        return;
+      }
+    }
+    State.prototype = fpgmState;
+    prepState = this._prepState = new State("prep", font.tables.prep);
+    prepState.ppem = ppem;
+    var oCvt = font.tables.cvt;
+    if (oCvt) {
+      var cvt = prepState.cvt = new Array(oCvt.length);
+      var scale = ppem / font.unitsPerEm;
+      for (var c = 0; c < oCvt.length; c++) {
+        cvt[c] = oCvt[c] * scale;
+      }
+    } else {
+      prepState.cvt = [];
+    }
+    if (exports.DEBUG) {
+      console.log("---EXEC PREP---");
+      prepState.step = -1;
+    }
+    try {
+      exec(prepState);
+    } catch (e) {
+      if (this._errorState < 2) {
+        console.log("Hinting error in PREP:" + e);
+      }
+      this._errorState = 2;
+    }
+  }
+  if (this._errorState > 1) {
+    return;
+  }
+  try {
+    return execGlyph(glyph, prepState);
+  } catch (e) {
+    if (this._errorState < 1) {
+      console.log("Hinting error:" + e);
+      console.log("Note: further hinting errors are silenced");
+    }
+    this._errorState = 1;
+    return void 0;
+  }
+};
+execGlyph = function(glyph, prepState) {
+  var xScale = prepState.ppem / prepState.font.unitsPerEm;
+  var yScale = xScale;
+  var components = glyph.components;
+  var contours;
+  var gZone;
+  var state;
+  State.prototype = prepState;
+  if (!components) {
+    state = new State("glyf", glyph.instructions);
+    if (exports.DEBUG) {
+      console.log("---EXEC GLYPH---");
+      state.step = -1;
+    }
+    execComponent(glyph, state, xScale, yScale);
+    gZone = state.gZone;
+  } else {
+    var font = prepState.font;
+    gZone = [];
+    contours = [];
+    for (var i = 0; i < components.length; i++) {
+      var c = components[i];
+      var cg = font.glyphs.get(c.glyphIndex);
+      state = new State("glyf", cg.instructions);
+      if (exports.DEBUG) {
+        console.log("---EXEC COMP " + i + "---");
+        state.step = -1;
+      }
+      execComponent(cg, state, xScale, yScale);
+      var dx = Math.round(c.dx * xScale);
+      var dy = Math.round(c.dy * yScale);
+      var gz = state.gZone;
+      var cc = state.contours;
+      for (var pi = 0; pi < gz.length; pi++) {
+        var p = gz[pi];
+        p.xTouched = p.yTouched = false;
+        p.xo = p.x = p.x + dx;
+        p.yo = p.y = p.y + dy;
+      }
+      var gLen = gZone.length;
+      gZone.push.apply(gZone, gz);
+      for (var j = 0; j < cc.length; j++) {
+        contours.push(cc[j] + gLen);
+      }
+    }
+    if (glyph.instructions && !state.inhibitGridFit) {
+      state = new State("glyf", glyph.instructions);
+      state.gZone = state.z0 = state.z1 = state.z2 = gZone;
+      state.contours = contours;
+      gZone.push(
+        new HPoint(0, 0),
+        new HPoint(Math.round(glyph.advanceWidth * xScale), 0)
+      );
+      if (exports.DEBUG) {
+        console.log("---EXEC COMPOSITE---");
+        state.step = -1;
+      }
+      exec(state);
+      gZone.length -= 2;
+    }
+  }
+  return gZone;
+};
+execComponent = function(glyph, state, xScale, yScale) {
+  var points = glyph.points || [];
+  var pLen = points.length;
+  var gZone = state.gZone = state.z0 = state.z1 = state.z2 = [];
+  var contours = state.contours = [];
+  var cp;
+  for (var i = 0; i < pLen; i++) {
+    cp = points[i];
+    gZone[i] = new HPoint(
+      cp.x * xScale,
+      cp.y * yScale,
+      cp.lastPointOfContour,
+      cp.onCurve
+    );
+  }
+  var sp;
+  var np;
+  for (var i$1 = 0; i$1 < pLen; i$1++) {
+    cp = gZone[i$1];
+    if (!sp) {
+      sp = cp;
+      contours.push(i$1);
+    }
+    if (cp.lastPointOfContour) {
+      cp.nextPointOnContour = sp;
+      sp.prevPointOnContour = cp;
+      sp = void 0;
+    } else {
+      np = gZone[i$1 + 1];
+      cp.nextPointOnContour = np;
+      np.prevPointOnContour = cp;
+    }
+  }
+  if (state.inhibitGridFit) {
+    return;
+  }
+  if (exports.DEBUG) {
+    console.log("PROCESSING GLYPH", state.stack);
+    for (var i$2 = 0; i$2 < pLen; i$2++) {
+      console.log(i$2, gZone[i$2].x, gZone[i$2].y);
+    }
+  }
+  gZone.push(
+    new HPoint(0, 0),
+    new HPoint(Math.round(glyph.advanceWidth * xScale), 0)
+  );
+  exec(state);
+  gZone.length -= 2;
+  if (exports.DEBUG) {
+    console.log("FINISHED GLYPH", state.stack);
+    for (var i$3 = 0; i$3 < pLen; i$3++) {
+      console.log(i$3, gZone[i$3].x, gZone[i$3].y);
+    }
+  }
+};
+exec = function(state) {
+  var prog = state.prog;
+  if (!prog) {
+    return;
+  }
+  var pLen = prog.length;
+  var ins;
+  for (state.ip = 0; state.ip < pLen; state.ip++) {
+    if (exports.DEBUG) {
+      state.step++;
+    }
+    ins = instructionTable[prog[state.ip]];
+    if (!ins) {
+      throw new Error(
+        "unknown instruction: 0x" + Number(prog[state.ip]).toString(16)
+      );
+    }
+    ins(state);
+  }
+};
 function initTZone(state) {
   var tZone = state.tZone = new Array(state.gZone.length);
   for (var i = 0; i < tZone.length; i++) {
@@ -4567,6 +9573,541 @@ function MDRP_MIRP(indirect, setRp0, keepD, ro, dt, state) {
     state.rp0 = pi;
   }
 }
+instructionTable = [
+  /* 0x00 */
+  SVTCA.bind(void 0, yUnitVector),
+  /* 0x01 */
+  SVTCA.bind(void 0, xUnitVector),
+  /* 0x02 */
+  SPVTCA.bind(void 0, yUnitVector),
+  /* 0x03 */
+  SPVTCA.bind(void 0, xUnitVector),
+  /* 0x04 */
+  SFVTCA.bind(void 0, yUnitVector),
+  /* 0x05 */
+  SFVTCA.bind(void 0, xUnitVector),
+  /* 0x06 */
+  SPVTL.bind(void 0, 0),
+  /* 0x07 */
+  SPVTL.bind(void 0, 1),
+  /* 0x08 */
+  SFVTL.bind(void 0, 0),
+  /* 0x09 */
+  SFVTL.bind(void 0, 1),
+  /* 0x0A */
+  SPVFS,
+  /* 0x0B */
+  SFVFS,
+  /* 0x0C */
+  GPV,
+  /* 0x0D */
+  GFV,
+  /* 0x0E */
+  SFVTPV,
+  /* 0x0F */
+  ISECT,
+  /* 0x10 */
+  SRP0,
+  /* 0x11 */
+  SRP1,
+  /* 0x12 */
+  SRP2,
+  /* 0x13 */
+  SZP0,
+  /* 0x14 */
+  SZP1,
+  /* 0x15 */
+  SZP2,
+  /* 0x16 */
+  SZPS,
+  /* 0x17 */
+  SLOOP,
+  /* 0x18 */
+  RTG,
+  /* 0x19 */
+  RTHG,
+  /* 0x1A */
+  SMD,
+  /* 0x1B */
+  ELSE,
+  /* 0x1C */
+  JMPR,
+  /* 0x1D */
+  SCVTCI,
+  /* 0x1E */
+  void 0,
+  // TODO SSWCI
+  /* 0x1F */
+  void 0,
+  // TODO SSW
+  /* 0x20 */
+  DUP,
+  /* 0x21 */
+  POP,
+  /* 0x22 */
+  CLEAR,
+  /* 0x23 */
+  SWAP,
+  /* 0x24 */
+  DEPTH,
+  /* 0x25 */
+  CINDEX,
+  /* 0x26 */
+  MINDEX,
+  /* 0x27 */
+  void 0,
+  // TODO ALIGNPTS
+  /* 0x28 */
+  void 0,
+  /* 0x29 */
+  void 0,
+  // TODO UTP
+  /* 0x2A */
+  LOOPCALL,
+  /* 0x2B */
+  CALL,
+  /* 0x2C */
+  FDEF,
+  /* 0x2D */
+  void 0,
+  // ENDF (eaten by FDEF)
+  /* 0x2E */
+  MDAP.bind(void 0, 0),
+  /* 0x2F */
+  MDAP.bind(void 0, 1),
+  /* 0x30 */
+  IUP.bind(void 0, yUnitVector),
+  /* 0x31 */
+  IUP.bind(void 0, xUnitVector),
+  /* 0x32 */
+  SHP.bind(void 0, 0),
+  /* 0x33 */
+  SHP.bind(void 0, 1),
+  /* 0x34 */
+  SHC.bind(void 0, 0),
+  /* 0x35 */
+  SHC.bind(void 0, 1),
+  /* 0x36 */
+  SHZ.bind(void 0, 0),
+  /* 0x37 */
+  SHZ.bind(void 0, 1),
+  /* 0x38 */
+  SHPIX,
+  /* 0x39 */
+  IP,
+  /* 0x3A */
+  MSIRP.bind(void 0, 0),
+  /* 0x3B */
+  MSIRP.bind(void 0, 1),
+  /* 0x3C */
+  ALIGNRP,
+  /* 0x3D */
+  RTDG,
+  /* 0x3E */
+  MIAP.bind(void 0, 0),
+  /* 0x3F */
+  MIAP.bind(void 0, 1),
+  /* 0x40 */
+  NPUSHB,
+  /* 0x41 */
+  NPUSHW,
+  /* 0x42 */
+  WS,
+  /* 0x43 */
+  RS,
+  /* 0x44 */
+  WCVTP,
+  /* 0x45 */
+  RCVT,
+  /* 0x46 */
+  GC.bind(void 0, 0),
+  /* 0x47 */
+  GC.bind(void 0, 1),
+  /* 0x48 */
+  void 0,
+  // TODO SCFS
+  /* 0x49 */
+  MD.bind(void 0, 0),
+  /* 0x4A */
+  MD.bind(void 0, 1),
+  /* 0x4B */
+  MPPEM,
+  /* 0x4C */
+  void 0,
+  // TODO MPS
+  /* 0x4D */
+  FLIPON,
+  /* 0x4E */
+  void 0,
+  // TODO FLIPOFF
+  /* 0x4F */
+  void 0,
+  // TODO DEBUG
+  /* 0x50 */
+  LT,
+  /* 0x51 */
+  LTEQ,
+  /* 0x52 */
+  GT,
+  /* 0x53 */
+  GTEQ,
+  /* 0x54 */
+  EQ,
+  /* 0x55 */
+  NEQ,
+  /* 0x56 */
+  ODD,
+  /* 0x57 */
+  EVEN,
+  /* 0x58 */
+  IF,
+  /* 0x59 */
+  EIF,
+  /* 0x5A */
+  AND,
+  /* 0x5B */
+  OR,
+  /* 0x5C */
+  NOT,
+  /* 0x5D */
+  DELTAP123.bind(void 0, 1),
+  /* 0x5E */
+  SDB,
+  /* 0x5F */
+  SDS,
+  /* 0x60 */
+  ADD,
+  /* 0x61 */
+  SUB,
+  /* 0x62 */
+  DIV,
+  /* 0x63 */
+  MUL,
+  /* 0x64 */
+  ABS,
+  /* 0x65 */
+  NEG,
+  /* 0x66 */
+  FLOOR,
+  /* 0x67 */
+  CEILING,
+  /* 0x68 */
+  ROUND.bind(void 0, 0),
+  /* 0x69 */
+  ROUND.bind(void 0, 1),
+  /* 0x6A */
+  ROUND.bind(void 0, 2),
+  /* 0x6B */
+  ROUND.bind(void 0, 3),
+  /* 0x6C */
+  void 0,
+  // TODO NROUND[ab]
+  /* 0x6D */
+  void 0,
+  // TODO NROUND[ab]
+  /* 0x6E */
+  void 0,
+  // TODO NROUND[ab]
+  /* 0x6F */
+  void 0,
+  // TODO NROUND[ab]
+  /* 0x70 */
+  WCVTF,
+  /* 0x71 */
+  DELTAP123.bind(void 0, 2),
+  /* 0x72 */
+  DELTAP123.bind(void 0, 3),
+  /* 0x73 */
+  DELTAC123.bind(void 0, 1),
+  /* 0x74 */
+  DELTAC123.bind(void 0, 2),
+  /* 0x75 */
+  DELTAC123.bind(void 0, 3),
+  /* 0x76 */
+  SROUND,
+  /* 0x77 */
+  S45ROUND,
+  /* 0x78 */
+  void 0,
+  // TODO JROT[]
+  /* 0x79 */
+  void 0,
+  // TODO JROF[]
+  /* 0x7A */
+  ROFF,
+  /* 0x7B */
+  void 0,
+  /* 0x7C */
+  RUTG,
+  /* 0x7D */
+  RDTG,
+  /* 0x7E */
+  POP,
+  // actually SANGW, supposed to do only a pop though
+  /* 0x7F */
+  POP,
+  // actually AA, supposed to do only a pop though
+  /* 0x80 */
+  void 0,
+  // TODO FLIPPT
+  /* 0x81 */
+  void 0,
+  // TODO FLIPRGON
+  /* 0x82 */
+  void 0,
+  // TODO FLIPRGOFF
+  /* 0x83 */
+  void 0,
+  /* 0x84 */
+  void 0,
+  /* 0x85 */
+  SCANCTRL,
+  /* 0x86 */
+  SDPVTL.bind(void 0, 0),
+  /* 0x87 */
+  SDPVTL.bind(void 0, 1),
+  /* 0x88 */
+  GETINFO,
+  /* 0x89 */
+  void 0,
+  // TODO IDEF
+  /* 0x8A */
+  ROLL,
+  /* 0x8B */
+  MAX,
+  /* 0x8C */
+  MIN,
+  /* 0x8D */
+  SCANTYPE,
+  /* 0x8E */
+  INSTCTRL,
+  /* 0x8F */
+  void 0,
+  /* 0x90 */
+  void 0,
+  /* 0x91 */
+  void 0,
+  /* 0x92 */
+  void 0,
+  /* 0x93 */
+  void 0,
+  /* 0x94 */
+  void 0,
+  /* 0x95 */
+  void 0,
+  /* 0x96 */
+  void 0,
+  /* 0x97 */
+  void 0,
+  /* 0x98 */
+  void 0,
+  /* 0x99 */
+  void 0,
+  /* 0x9A */
+  void 0,
+  /* 0x9B */
+  void 0,
+  /* 0x9C */
+  void 0,
+  /* 0x9D */
+  void 0,
+  /* 0x9E */
+  void 0,
+  /* 0x9F */
+  void 0,
+  /* 0xA0 */
+  void 0,
+  /* 0xA1 */
+  void 0,
+  /* 0xA2 */
+  void 0,
+  /* 0xA3 */
+  void 0,
+  /* 0xA4 */
+  void 0,
+  /* 0xA5 */
+  void 0,
+  /* 0xA6 */
+  void 0,
+  /* 0xA7 */
+  void 0,
+  /* 0xA8 */
+  void 0,
+  /* 0xA9 */
+  void 0,
+  /* 0xAA */
+  void 0,
+  /* 0xAB */
+  void 0,
+  /* 0xAC */
+  void 0,
+  /* 0xAD */
+  void 0,
+  /* 0xAE */
+  void 0,
+  /* 0xAF */
+  void 0,
+  /* 0xB0 */
+  PUSHB.bind(void 0, 1),
+  /* 0xB1 */
+  PUSHB.bind(void 0, 2),
+  /* 0xB2 */
+  PUSHB.bind(void 0, 3),
+  /* 0xB3 */
+  PUSHB.bind(void 0, 4),
+  /* 0xB4 */
+  PUSHB.bind(void 0, 5),
+  /* 0xB5 */
+  PUSHB.bind(void 0, 6),
+  /* 0xB6 */
+  PUSHB.bind(void 0, 7),
+  /* 0xB7 */
+  PUSHB.bind(void 0, 8),
+  /* 0xB8 */
+  PUSHW.bind(void 0, 1),
+  /* 0xB9 */
+  PUSHW.bind(void 0, 2),
+  /* 0xBA */
+  PUSHW.bind(void 0, 3),
+  /* 0xBB */
+  PUSHW.bind(void 0, 4),
+  /* 0xBC */
+  PUSHW.bind(void 0, 5),
+  /* 0xBD */
+  PUSHW.bind(void 0, 6),
+  /* 0xBE */
+  PUSHW.bind(void 0, 7),
+  /* 0xBF */
+  PUSHW.bind(void 0, 8),
+  /* 0xC0 */
+  MDRP_MIRP.bind(void 0, 0, 0, 0, 0, 0),
+  /* 0xC1 */
+  MDRP_MIRP.bind(void 0, 0, 0, 0, 0, 1),
+  /* 0xC2 */
+  MDRP_MIRP.bind(void 0, 0, 0, 0, 0, 2),
+  /* 0xC3 */
+  MDRP_MIRP.bind(void 0, 0, 0, 0, 0, 3),
+  /* 0xC4 */
+  MDRP_MIRP.bind(void 0, 0, 0, 0, 1, 0),
+  /* 0xC5 */
+  MDRP_MIRP.bind(void 0, 0, 0, 0, 1, 1),
+  /* 0xC6 */
+  MDRP_MIRP.bind(void 0, 0, 0, 0, 1, 2),
+  /* 0xC7 */
+  MDRP_MIRP.bind(void 0, 0, 0, 0, 1, 3),
+  /* 0xC8 */
+  MDRP_MIRP.bind(void 0, 0, 0, 1, 0, 0),
+  /* 0xC9 */
+  MDRP_MIRP.bind(void 0, 0, 0, 1, 0, 1),
+  /* 0xCA */
+  MDRP_MIRP.bind(void 0, 0, 0, 1, 0, 2),
+  /* 0xCB */
+  MDRP_MIRP.bind(void 0, 0, 0, 1, 0, 3),
+  /* 0xCC */
+  MDRP_MIRP.bind(void 0, 0, 0, 1, 1, 0),
+  /* 0xCD */
+  MDRP_MIRP.bind(void 0, 0, 0, 1, 1, 1),
+  /* 0xCE */
+  MDRP_MIRP.bind(void 0, 0, 0, 1, 1, 2),
+  /* 0xCF */
+  MDRP_MIRP.bind(void 0, 0, 0, 1, 1, 3),
+  /* 0xD0 */
+  MDRP_MIRP.bind(void 0, 0, 1, 0, 0, 0),
+  /* 0xD1 */
+  MDRP_MIRP.bind(void 0, 0, 1, 0, 0, 1),
+  /* 0xD2 */
+  MDRP_MIRP.bind(void 0, 0, 1, 0, 0, 2),
+  /* 0xD3 */
+  MDRP_MIRP.bind(void 0, 0, 1, 0, 0, 3),
+  /* 0xD4 */
+  MDRP_MIRP.bind(void 0, 0, 1, 0, 1, 0),
+  /* 0xD5 */
+  MDRP_MIRP.bind(void 0, 0, 1, 0, 1, 1),
+  /* 0xD6 */
+  MDRP_MIRP.bind(void 0, 0, 1, 0, 1, 2),
+  /* 0xD7 */
+  MDRP_MIRP.bind(void 0, 0, 1, 0, 1, 3),
+  /* 0xD8 */
+  MDRP_MIRP.bind(void 0, 0, 1, 1, 0, 0),
+  /* 0xD9 */
+  MDRP_MIRP.bind(void 0, 0, 1, 1, 0, 1),
+  /* 0xDA */
+  MDRP_MIRP.bind(void 0, 0, 1, 1, 0, 2),
+  /* 0xDB */
+  MDRP_MIRP.bind(void 0, 0, 1, 1, 0, 3),
+  /* 0xDC */
+  MDRP_MIRP.bind(void 0, 0, 1, 1, 1, 0),
+  /* 0xDD */
+  MDRP_MIRP.bind(void 0, 0, 1, 1, 1, 1),
+  /* 0xDE */
+  MDRP_MIRP.bind(void 0, 0, 1, 1, 1, 2),
+  /* 0xDF */
+  MDRP_MIRP.bind(void 0, 0, 1, 1, 1, 3),
+  /* 0xE0 */
+  MDRP_MIRP.bind(void 0, 1, 0, 0, 0, 0),
+  /* 0xE1 */
+  MDRP_MIRP.bind(void 0, 1, 0, 0, 0, 1),
+  /* 0xE2 */
+  MDRP_MIRP.bind(void 0, 1, 0, 0, 0, 2),
+  /* 0xE3 */
+  MDRP_MIRP.bind(void 0, 1, 0, 0, 0, 3),
+  /* 0xE4 */
+  MDRP_MIRP.bind(void 0, 1, 0, 0, 1, 0),
+  /* 0xE5 */
+  MDRP_MIRP.bind(void 0, 1, 0, 0, 1, 1),
+  /* 0xE6 */
+  MDRP_MIRP.bind(void 0, 1, 0, 0, 1, 2),
+  /* 0xE7 */
+  MDRP_MIRP.bind(void 0, 1, 0, 0, 1, 3),
+  /* 0xE8 */
+  MDRP_MIRP.bind(void 0, 1, 0, 1, 0, 0),
+  /* 0xE9 */
+  MDRP_MIRP.bind(void 0, 1, 0, 1, 0, 1),
+  /* 0xEA */
+  MDRP_MIRP.bind(void 0, 1, 0, 1, 0, 2),
+  /* 0xEB */
+  MDRP_MIRP.bind(void 0, 1, 0, 1, 0, 3),
+  /* 0xEC */
+  MDRP_MIRP.bind(void 0, 1, 0, 1, 1, 0),
+  /* 0xED */
+  MDRP_MIRP.bind(void 0, 1, 0, 1, 1, 1),
+  /* 0xEE */
+  MDRP_MIRP.bind(void 0, 1, 0, 1, 1, 2),
+  /* 0xEF */
+  MDRP_MIRP.bind(void 0, 1, 0, 1, 1, 3),
+  /* 0xF0 */
+  MDRP_MIRP.bind(void 0, 1, 1, 0, 0, 0),
+  /* 0xF1 */
+  MDRP_MIRP.bind(void 0, 1, 1, 0, 0, 1),
+  /* 0xF2 */
+  MDRP_MIRP.bind(void 0, 1, 1, 0, 0, 2),
+  /* 0xF3 */
+  MDRP_MIRP.bind(void 0, 1, 1, 0, 0, 3),
+  /* 0xF4 */
+  MDRP_MIRP.bind(void 0, 1, 1, 0, 1, 0),
+  /* 0xF5 */
+  MDRP_MIRP.bind(void 0, 1, 1, 0, 1, 1),
+  /* 0xF6 */
+  MDRP_MIRP.bind(void 0, 1, 1, 0, 1, 2),
+  /* 0xF7 */
+  MDRP_MIRP.bind(void 0, 1, 1, 0, 1, 3),
+  /* 0xF8 */
+  MDRP_MIRP.bind(void 0, 1, 1, 1, 0, 0),
+  /* 0xF9 */
+  MDRP_MIRP.bind(void 0, 1, 1, 1, 0, 1),
+  /* 0xFA */
+  MDRP_MIRP.bind(void 0, 1, 1, 1, 0, 2),
+  /* 0xFB */
+  MDRP_MIRP.bind(void 0, 1, 1, 1, 0, 3),
+  /* 0xFC */
+  MDRP_MIRP.bind(void 0, 1, 1, 1, 1, 0),
+  /* 0xFD */
+  MDRP_MIRP.bind(void 0, 1, 1, 1, 1, 1),
+  /* 0xFE */
+  MDRP_MIRP.bind(void 0, 1, 1, 1, 1, 2),
+  /* 0xFF */
+  MDRP_MIRP.bind(void 0, 1, 1, 1, 1, 3)
+];
 function Token(char) {
   this.char = char;
   this.state = {};
@@ -4648,6 +10189,279 @@ function Tokenizer(events) {
   this.registeredModifiers = [];
   initializeCoreEvents.call(this, events);
 }
+Token.prototype.setState = function(key, value) {
+  this.state[key] = value;
+  this.activeState = { key, value: this.state[key] };
+  return this.activeState;
+};
+Token.prototype.getState = function(stateId) {
+  return this.state[stateId] || null;
+};
+Tokenizer.prototype.inboundIndex = function(index) {
+  return index >= 0 && index < this.tokens.length;
+};
+Tokenizer.prototype.composeRUD = function(RUDs) {
+  var this$1 = this;
+  var silent = true;
+  var state = RUDs.map(function(RUD) {
+    return this$1[RUD[0]].apply(this$1, RUD.slice(1).concat(silent));
+  });
+  var hasFAILObject = function(obj) {
+    return typeof obj === "object" && obj.hasOwnProperty("FAIL");
+  };
+  if (state.every(hasFAILObject)) {
+    return {
+      FAIL: "composeRUD: one or more operations hasn't completed successfully",
+      report: state.filter(hasFAILObject)
+    };
+  }
+  this.dispatch("composeRUD", [state.filter(function(op) {
+    return !hasFAILObject(op);
+  })]);
+};
+Tokenizer.prototype.replaceRange = function(startIndex, offset, tokens, silent) {
+  offset = offset !== null ? offset : this.tokens.length;
+  var isTokenType = tokens.every(function(token) {
+    return token instanceof Token;
+  });
+  if (!isNaN(startIndex) && this.inboundIndex(startIndex) && isTokenType) {
+    var replaced = this.tokens.splice.apply(
+      this.tokens,
+      [startIndex, offset].concat(tokens)
+    );
+    if (!silent) {
+      this.dispatch("replaceToken", [startIndex, offset, tokens]);
+    }
+    return [replaced, tokens];
+  } else {
+    return { FAIL: "replaceRange: invalid tokens or startIndex." };
+  }
+};
+Tokenizer.prototype.replaceToken = function(index, token, silent) {
+  if (!isNaN(index) && this.inboundIndex(index) && token instanceof Token) {
+    var replaced = this.tokens.splice(index, 1, token);
+    if (!silent) {
+      this.dispatch("replaceToken", [index, token]);
+    }
+    return [replaced[0], token];
+  } else {
+    return { FAIL: "replaceToken: invalid token or index." };
+  }
+};
+Tokenizer.prototype.removeRange = function(startIndex, offset, silent) {
+  offset = !isNaN(offset) ? offset : this.tokens.length;
+  var tokens = this.tokens.splice(startIndex, offset);
+  if (!silent) {
+    this.dispatch("removeRange", [tokens, startIndex, offset]);
+  }
+  return tokens;
+};
+Tokenizer.prototype.removeToken = function(index, silent) {
+  if (!isNaN(index) && this.inboundIndex(index)) {
+    var token = this.tokens.splice(index, 1);
+    if (!silent) {
+      this.dispatch("removeToken", [token, index]);
+    }
+    return token;
+  } else {
+    return { FAIL: "removeToken: invalid token index." };
+  }
+};
+Tokenizer.prototype.insertToken = function(tokens, index, silent) {
+  var tokenType = tokens.every(
+    function(token) {
+      return token instanceof Token;
+    }
+  );
+  if (tokenType) {
+    this.tokens.splice.apply(
+      this.tokens,
+      [index, 0].concat(tokens)
+    );
+    if (!silent) {
+      this.dispatch("insertToken", [tokens, index]);
+    }
+    return tokens;
+  } else {
+    return { FAIL: "insertToken: invalid token(s)." };
+  }
+};
+Tokenizer.prototype.registerModifier = function(modifierId, condition, modifier) {
+  this.events.newToken.subscribe(function(token, contextParams) {
+    var conditionParams = [token, contextParams];
+    var canApplyModifier = condition === null || condition.apply(this, conditionParams) === true;
+    var modifierParams = [token, contextParams];
+    if (canApplyModifier) {
+      var newStateValue = modifier.apply(this, modifierParams);
+      token.setState(modifierId, newStateValue);
+    }
+  });
+  this.registeredModifiers.push(modifierId);
+};
+Event.prototype.subscribe = function(eventHandler) {
+  if (typeof eventHandler === "function") {
+    return this.subscribers.push(eventHandler) - 1;
+  } else {
+    return { FAIL: "invalid '" + this.eventId + "' event handler" };
+  }
+};
+Event.prototype.unsubscribe = function(subsId) {
+  this.subscribers.splice(subsId, 1);
+};
+ContextParams.prototype.setCurrentIndex = function(index) {
+  this.index = index;
+  this.current = this.context[index];
+  this.backtrack = this.context.slice(0, index);
+  this.lookahead = this.context.slice(index + 1);
+};
+ContextParams.prototype.get = function(offset) {
+  switch (true) {
+    case offset === 0:
+      return this.current;
+    case (offset < 0 && Math.abs(offset) <= this.backtrack.length):
+      return this.backtrack.slice(offset)[0];
+    case (offset > 0 && offset <= this.lookahead.length):
+      return this.lookahead[offset - 1];
+    default:
+      return null;
+  }
+};
+Tokenizer.prototype.rangeToText = function(range) {
+  if (range instanceof ContextRange) {
+    return this.getRangeTokens(range).map(function(token) {
+      return token.char;
+    }).join("");
+  }
+};
+Tokenizer.prototype.getText = function() {
+  return this.tokens.map(function(token) {
+    return token.char;
+  }).join("");
+};
+Tokenizer.prototype.getContext = function(contextName) {
+  var context = this.registeredContexts[contextName];
+  return !!context ? context : null;
+};
+Tokenizer.prototype.on = function(eventName, eventHandler) {
+  var event = this.events[eventName];
+  if (!!event) {
+    return event.subscribe(eventHandler);
+  } else {
+    return null;
+  }
+};
+Tokenizer.prototype.dispatch = function(eventName, args) {
+  var this$1 = this;
+  var event = this.events[eventName];
+  if (event instanceof Event) {
+    event.subscribers.forEach(function(subscriber) {
+      subscriber.apply(this$1, args || []);
+    });
+  }
+};
+Tokenizer.prototype.registerContextChecker = function(contextName, contextStartCheck, contextEndCheck) {
+  if (!!this.getContext(contextName)) {
+    return {
+      FAIL: "context name '" + contextName + "' is already registered."
+    };
+  }
+  if (typeof contextStartCheck !== "function") {
+    return {
+      FAIL: "missing context start check."
+    };
+  }
+  if (typeof contextEndCheck !== "function") {
+    return {
+      FAIL: "missing context end check."
+    };
+  }
+  var contextCheckers = new ContextChecker(
+    contextName,
+    contextStartCheck,
+    contextEndCheck
+  );
+  this.registeredContexts[contextName] = contextCheckers;
+  this.contextCheckers.push(contextCheckers);
+  return contextCheckers;
+};
+Tokenizer.prototype.getRangeTokens = function(range) {
+  var endIndex = range.startIndex + range.endOffset;
+  return [].concat(
+    this.tokens.slice(range.startIndex, endIndex)
+  );
+};
+Tokenizer.prototype.getContextRanges = function(contextName) {
+  var context = this.getContext(contextName);
+  if (!!context) {
+    return context.ranges;
+  } else {
+    return { FAIL: "context checker '" + contextName + "' is not registered." };
+  }
+};
+Tokenizer.prototype.resetContextsRanges = function() {
+  var registeredContexts = this.registeredContexts;
+  for (var contextName in registeredContexts) {
+    if (registeredContexts.hasOwnProperty(contextName)) {
+      var context = registeredContexts[contextName];
+      context.ranges = [];
+    }
+  }
+};
+Tokenizer.prototype.updateContextsRanges = function() {
+  this.resetContextsRanges();
+  var chars = this.tokens.map(function(token) {
+    return token.char;
+  });
+  for (var i = 0; i < chars.length; i++) {
+    var contextParams = new ContextParams(chars, i);
+    this.runContextCheck(contextParams);
+  }
+  this.dispatch("updateContextsRanges", [this.registeredContexts]);
+};
+Tokenizer.prototype.setEndOffset = function(offset, contextName) {
+  var startIndex = this.getContext(contextName).openRange.startIndex;
+  var range = new ContextRange(startIndex, offset, contextName);
+  var ranges = this.getContext(contextName).ranges;
+  range.rangeId = contextName + "." + ranges.length;
+  ranges.push(range);
+  this.getContext(contextName).openRange = null;
+  return range;
+};
+Tokenizer.prototype.runContextCheck = function(contextParams) {
+  var this$1 = this;
+  var index = contextParams.index;
+  this.contextCheckers.forEach(function(contextChecker) {
+    var contextName = contextChecker.contextName;
+    var openRange = this$1.getContext(contextName).openRange;
+    if (!openRange && contextChecker.checkStart(contextParams)) {
+      openRange = new ContextRange(index, null, contextName);
+      this$1.getContext(contextName).openRange = openRange;
+      this$1.dispatch("contextStart", [contextName, index]);
+    }
+    if (!!openRange && contextChecker.checkEnd(contextParams)) {
+      var offset = index - openRange.startIndex + 1;
+      var range = this$1.setEndOffset(offset, contextName);
+      this$1.dispatch("contextEnd", [contextName, range]);
+    }
+  });
+};
+Tokenizer.prototype.tokenize = function(text) {
+  this.tokens = [];
+  this.resetContextsRanges();
+  var chars = Array.from(text);
+  this.dispatch("start");
+  for (var i = 0; i < chars.length; i++) {
+    var char = chars[i];
+    var contextParams = new ContextParams(chars, i);
+    this.dispatch("next", [contextParams]);
+    this.runContextCheck(contextParams);
+    var token = new Token(char);
+    this.tokens.push(token);
+    this.dispatch("newToken", [token, contextParams]);
+  }
+  this.dispatch("end", [this.tokens]);
+  return this.tokens;
+};
 function isArabicChar(c) {
   return /[\u0600-\u065F\u066A-\u06D2\u06FA-\u06FF]/.test(c);
 }
@@ -4817,6 +10631,243 @@ function decompositionSubstitutionFormat1(glyphIndex, subtable) {
   }
   return subtable.sequences[substituteIndex];
 }
+FeatureQuery.prototype.getDefaultScriptFeaturesIndexes = function() {
+  var scripts = this.font.tables.gsub.scripts;
+  for (var s = 0; s < scripts.length; s++) {
+    var script = scripts[s];
+    if (script.tag === "DFLT") {
+      return script.script.defaultLangSys.featureIndexes;
+    }
+  }
+  return [];
+};
+FeatureQuery.prototype.getScriptFeaturesIndexes = function(scriptTag) {
+  var tables = this.font.tables;
+  if (!tables.gsub) {
+    return [];
+  }
+  if (!scriptTag) {
+    return this.getDefaultScriptFeaturesIndexes();
+  }
+  var scripts = this.font.tables.gsub.scripts;
+  for (var i = 0; i < scripts.length; i++) {
+    var script = scripts[i];
+    if (script.tag === scriptTag && script.script.defaultLangSys) {
+      return script.script.defaultLangSys.featureIndexes;
+    } else {
+      var langSysRecords = script.langSysRecords;
+      if (!!langSysRecords) {
+        for (var j = 0; j < langSysRecords.length; j++) {
+          var langSysRecord = langSysRecords[j];
+          if (langSysRecord.tag === scriptTag) {
+            var langSys = langSysRecord.langSys;
+            return langSys.featureIndexes;
+          }
+        }
+      }
+    }
+  }
+  return this.getDefaultScriptFeaturesIndexes();
+};
+FeatureQuery.prototype.mapTagsToFeatures = function(features, scriptTag) {
+  var tags = {};
+  for (var i = 0; i < features.length; i++) {
+    var tag = features[i].tag;
+    var feature = features[i].feature;
+    tags[tag] = feature;
+  }
+  this.features[scriptTag].tags = tags;
+};
+FeatureQuery.prototype.getScriptFeatures = function(scriptTag) {
+  var features = this.features[scriptTag];
+  if (this.features.hasOwnProperty(scriptTag)) {
+    return features;
+  }
+  var featuresIndexes = this.getScriptFeaturesIndexes(scriptTag);
+  if (!featuresIndexes) {
+    return null;
+  }
+  var gsub2 = this.font.tables.gsub;
+  features = featuresIndexes.map(function(index) {
+    return gsub2.features[index];
+  });
+  this.features[scriptTag] = features;
+  this.mapTagsToFeatures(features, scriptTag);
+  return features;
+};
+FeatureQuery.prototype.getSubstitutionType = function(lookupTable, subtable) {
+  var lookupType = lookupTable.lookupType.toString();
+  var substFormat = subtable.substFormat.toString();
+  return lookupType + substFormat;
+};
+FeatureQuery.prototype.getLookupMethod = function(lookupTable, subtable) {
+  var this$1 = this;
+  var substitutionType = this.getSubstitutionType(lookupTable, subtable);
+  switch (substitutionType) {
+    case "11":
+      return function(glyphIndex) {
+        return singleSubstitutionFormat1.apply(
+          this$1,
+          [glyphIndex, subtable]
+        );
+      };
+    case "12":
+      return function(glyphIndex) {
+        return singleSubstitutionFormat2.apply(
+          this$1,
+          [glyphIndex, subtable]
+        );
+      };
+    case "63":
+      return function(contextParams) {
+        return chainingSubstitutionFormat3.apply(
+          this$1,
+          [contextParams, subtable]
+        );
+      };
+    case "41":
+      return function(contextParams) {
+        return ligatureSubstitutionFormat1.apply(
+          this$1,
+          [contextParams, subtable]
+        );
+      };
+    case "21":
+      return function(glyphIndex) {
+        return decompositionSubstitutionFormat1.apply(
+          this$1,
+          [glyphIndex, subtable]
+        );
+      };
+    default:
+      throw new Error(
+        "lookupType: " + lookupTable.lookupType + " - substFormat: " + subtable.substFormat + " is not yet supported"
+      );
+  }
+};
+FeatureQuery.prototype.lookupFeature = function(query) {
+  var contextParams = query.contextParams;
+  var currentIndex = contextParams.index;
+  var feature = this.getFeature({
+    tag: query.tag,
+    script: query.script
+  });
+  if (!feature) {
+    return new Error(
+      "font '" + this.font.names.fullName.en + "' doesn't support feature '" + query.tag + "' for script '" + query.script + "'."
+    );
+  }
+  var lookups = this.getFeatureLookups(feature);
+  var substitutions = [].concat(contextParams.context);
+  for (var l = 0; l < lookups.length; l++) {
+    var lookupTable = lookups[l];
+    var subtables = this.getLookupSubtables(lookupTable);
+    for (var s = 0; s < subtables.length; s++) {
+      var subtable = subtables[s];
+      var substType = this.getSubstitutionType(lookupTable, subtable);
+      var lookup = this.getLookupMethod(lookupTable, subtable);
+      var substitution = void 0;
+      switch (substType) {
+        case "11":
+          substitution = lookup(contextParams.current);
+          if (substitution) {
+            substitutions.splice(currentIndex, 1, new SubstitutionAction({
+              id: 11,
+              tag: query.tag,
+              substitution
+            }));
+          }
+          break;
+        case "12":
+          substitution = lookup(contextParams.current);
+          if (substitution) {
+            substitutions.splice(currentIndex, 1, new SubstitutionAction({
+              id: 12,
+              tag: query.tag,
+              substitution
+            }));
+          }
+          break;
+        case "63":
+          substitution = lookup(contextParams);
+          if (Array.isArray(substitution) && substitution.length) {
+            substitutions.splice(currentIndex, 1, new SubstitutionAction({
+              id: 63,
+              tag: query.tag,
+              substitution
+            }));
+          }
+          break;
+        case "41":
+          substitution = lookup(contextParams);
+          if (substitution) {
+            substitutions.splice(currentIndex, 1, new SubstitutionAction({
+              id: 41,
+              tag: query.tag,
+              substitution
+            }));
+          }
+          break;
+        case "21":
+          substitution = lookup(contextParams.current);
+          if (substitution) {
+            substitutions.splice(currentIndex, 1, new SubstitutionAction({
+              id: 21,
+              tag: query.tag,
+              substitution
+            }));
+          }
+          break;
+      }
+      contextParams = new ContextParams(substitutions, currentIndex);
+      if (Array.isArray(substitution) && !substitution.length) {
+        continue;
+      }
+      substitution = null;
+    }
+  }
+  return substitutions.length ? substitutions : null;
+};
+FeatureQuery.prototype.supports = function(query) {
+  if (!query.script) {
+    return false;
+  }
+  this.getScriptFeatures(query.script);
+  var supportedScript = this.features.hasOwnProperty(query.script);
+  if (!query.tag) {
+    return supportedScript;
+  }
+  var supportedFeature = this.features[query.script].some(function(feature) {
+    return feature.tag === query.tag;
+  });
+  return supportedScript && supportedFeature;
+};
+FeatureQuery.prototype.getLookupSubtables = function(lookupTable) {
+  return lookupTable.subtables || null;
+};
+FeatureQuery.prototype.getLookupByIndex = function(index) {
+  var lookups = this.font.tables.gsub.lookups;
+  return lookups[index] || null;
+};
+FeatureQuery.prototype.getFeatureLookups = function(feature) {
+  return feature.lookupListIndexes.map(this.getLookupByIndex.bind(this));
+};
+FeatureQuery.prototype.getFeature = function getFeature(query) {
+  if (!this.font) {
+    return { FAIL: "No font was found" };
+  }
+  if (!this.features.hasOwnProperty(query.script)) {
+    this.getScriptFeatures(query.script);
+  }
+  var scriptFeatures = this.features[query.script];
+  if (!scriptFeatures) {
+    return { FAIL: "No feature for script " + query.script };
+  }
+  if (!scriptFeatures.tags[query.tag]) {
+    return null;
+  }
+  return this.features[query.script].tags[query.tag];
+};
 function arabicWordStartCheck(contextParams) {
   var char = contextParams.current;
   var prevChar = contextParams.get(-1);
@@ -4834,6 +10885,10 @@ function arabicWordEndCheck(contextParams) {
     !isArabicChar(nextChar)
   );
 }
+var arabicWordCheck = {
+  startCheck: arabicWordStartCheck,
+  endCheck: arabicWordEndCheck
+};
 function arabicSentenceStartCheck(contextParams) {
   var char = contextParams.current;
   var prevChar = contextParams.get(-1);
@@ -4868,6 +10923,10 @@ function arabicSentenceEndCheck(contextParams) {
       return false;
   }
 }
+var arabicSentenceCheck = {
+  startCheck: arabicSentenceStartCheck,
+  endCheck: arabicSentenceEndCheck
+};
 function singleSubstitutionFormat1$1(action, tokens, index) {
   tokens[index].setState(action.tag, action.substitution);
 }
@@ -4889,6 +10948,12 @@ function ligatureSubstitutionFormat1$1(action, tokens, index) {
     token.setState("deleted", true);
   }
 }
+var SUBSTITUTIONS = {
+  11: singleSubstitutionFormat1$1,
+  12: singleSubstitutionFormat2$1,
+  63: chainingSubstitutionFormat3$1,
+  41: ligatureSubstitutionFormat1$1
+};
 function applySubstitution(action, tokens, index) {
   if (action instanceof SubstitutionAction && SUBSTITUTIONS[action.id]) {
     SUBSTITUTIONS[action.id](action, tokens, index);
@@ -5035,6 +11100,10 @@ function latinWordEndCheck(contextParams) {
     !isLatinChar(nextChar)
   );
 }
+var latinWordCheck = {
+  startCheck: latinWordStartCheck,
+  endCheck: latinWordEndCheck
+};
 function getContextParams$1(tokens, index) {
   var context = tokens.map(function(token) {
     return token.activeState.value;
@@ -5068,6 +11137,14 @@ function Bidi(baseDir) {
   this.tokenizer = new Tokenizer();
   this.featuresTags = {};
 }
+Bidi.prototype.setText = function(text) {
+  this.text = text;
+};
+Bidi.prototype.contextChecks = {
+  latinWordCheck,
+  arabicWordCheck,
+  arabicSentenceCheck
+};
 function registerContextChecker(checkId) {
   var check2 = this.contextChecks[checkId + "Check"];
   return this.tokenizer.registerContextChecker(
@@ -5094,6 +11171,39 @@ function reverseArabicSentences() {
     );
   });
 }
+Bidi.prototype.registerFeatures = function(script, tags) {
+  var this$1 = this;
+  var supportedTags = tags.filter(
+    function(tag) {
+      return this$1.query.supports({ script, tag });
+    }
+  );
+  if (!this.featuresTags.hasOwnProperty(script)) {
+    this.featuresTags[script] = supportedTags;
+  } else {
+    this.featuresTags[script] = this.featuresTags[script].concat(supportedTags);
+  }
+};
+Bidi.prototype.applyFeatures = function(font, features) {
+  if (!font) {
+    throw new Error(
+      "No valid font was provided to apply features"
+    );
+  }
+  if (!this.query) {
+    this.query = new FeatureQuery(font);
+  }
+  for (var f = 0; f < features.length; f++) {
+    var feature = features[f];
+    if (!this.query.supports({ script: feature.script })) {
+      continue;
+    }
+    this.registerFeatures(feature.script, feature.tags);
+  }
+};
+Bidi.prototype.registerModifier = function(modifierId, condition, modifier) {
+  this.tokenizer.registerModifier(modifierId, condition, modifier);
+};
 function checkGlyphIndexStatus() {
   if (this.tokenizer.registeredModifiers.indexOf("glyphIndex") === -1) {
     throw new Error(
@@ -5145,6 +11255,45 @@ function applyLatinLigatures() {
     latinLigature.call(this$1, range);
   });
 }
+Bidi.prototype.checkContextReady = function(contextId) {
+  return !!this.tokenizer.getContext(contextId);
+};
+Bidi.prototype.applyFeaturesToContexts = function() {
+  if (this.checkContextReady("arabicWord")) {
+    applyArabicPresentationForms.call(this);
+    applyArabicRequireLigatures.call(this);
+  }
+  if (this.checkContextReady("latinWord")) {
+    applyLatinLigatures.call(this);
+  }
+  if (this.checkContextReady("arabicSentence")) {
+    reverseArabicSentences.call(this);
+  }
+};
+Bidi.prototype.processText = function(text) {
+  if (!this.text || this.text !== text) {
+    this.setText(text);
+    tokenizeText.call(this);
+    this.applyFeaturesToContexts();
+  }
+};
+Bidi.prototype.getBidiText = function(text) {
+  this.processText(text);
+  return this.tokenizer.getText();
+};
+Bidi.prototype.getTextGlyphs = function(text) {
+  this.processText(text);
+  var indexes = [];
+  for (var i = 0; i < this.tokenizer.tokens.length; i++) {
+    var token = this.tokenizer.tokens[i];
+    if (token.state.deleted) {
+      continue;
+    }
+    var index = token.activeState.value;
+    indexes.push(Array.isArray(index) ? index[0] : index);
+  }
+  return indexes;
+};
 function Font(options) {
   options = options || {};
   options.tables = options.tables || {};
@@ -5202,6 +11351,259 @@ function Font(options) {
     }
   });
 }
+Font.prototype.hasChar = function(c) {
+  return this.encoding.charToGlyphIndex(c) !== null;
+};
+Font.prototype.charToGlyphIndex = function(s) {
+  return this.encoding.charToGlyphIndex(s);
+};
+Font.prototype.charToGlyph = function(c) {
+  var glyphIndex = this.charToGlyphIndex(c);
+  var glyph = this.glyphs.get(glyphIndex);
+  if (!glyph) {
+    glyph = this.glyphs.get(0);
+  }
+  return glyph;
+};
+Font.prototype.updateFeatures = function(options) {
+  return this.defaultRenderOptions.features.map(function(feature) {
+    if (feature.script === "latn") {
+      return {
+        script: "latn",
+        tags: feature.tags.filter(function(tag) {
+          return options[tag];
+        })
+      };
+    } else {
+      return feature;
+    }
+  });
+};
+Font.prototype.stringToGlyphs = function(s, options) {
+  var this$1 = this;
+  var bidi = new Bidi();
+  var charToGlyphIndexMod = function(token) {
+    return this$1.charToGlyphIndex(token.char);
+  };
+  bidi.registerModifier("glyphIndex", null, charToGlyphIndexMod);
+  var features = options ? this.updateFeatures(options.features) : this.defaultRenderOptions.features;
+  bidi.applyFeatures(this, features);
+  var indexes = bidi.getTextGlyphs(s);
+  var length = indexes.length;
+  var glyphs = new Array(length);
+  var notdef = this.glyphs.get(0);
+  for (var i = 0; i < length; i += 1) {
+    glyphs[i] = this.glyphs.get(indexes[i]) || notdef;
+  }
+  return glyphs;
+};
+Font.prototype.nameToGlyphIndex = function(name) {
+  return this.glyphNames.nameToGlyphIndex(name);
+};
+Font.prototype.nameToGlyph = function(name) {
+  var glyphIndex = this.nameToGlyphIndex(name);
+  var glyph = this.glyphs.get(glyphIndex);
+  if (!glyph) {
+    glyph = this.glyphs.get(0);
+  }
+  return glyph;
+};
+Font.prototype.glyphIndexToName = function(gid) {
+  if (!this.glyphNames.glyphIndexToName) {
+    return "";
+  }
+  return this.glyphNames.glyphIndexToName(gid);
+};
+Font.prototype.getKerningValue = function(leftGlyph, rightGlyph) {
+  leftGlyph = leftGlyph.index || leftGlyph;
+  rightGlyph = rightGlyph.index || rightGlyph;
+  var gposKerning = this.position.defaultKerningTables;
+  if (gposKerning) {
+    return this.position.getKerningValue(gposKerning, leftGlyph, rightGlyph);
+  }
+  return this.kerningPairs[leftGlyph + "," + rightGlyph] || 0;
+};
+Font.prototype.defaultRenderOptions = {
+  kerning: true,
+  features: [
+    /**
+     * these 4 features are required to render Arabic text properly
+     * and shouldn't be turned off when rendering arabic text.
+     */
+    { script: "arab", tags: ["init", "medi", "fina", "rlig"] },
+    { script: "latn", tags: ["liga", "rlig"] }
+  ]
+};
+Font.prototype.forEachGlyph = function(text, x, y, fontSize, options, callback) {
+  x = x !== void 0 ? x : 0;
+  y = y !== void 0 ? y : 0;
+  fontSize = fontSize !== void 0 ? fontSize : 72;
+  options = Object.assign({}, this.defaultRenderOptions, options);
+  var fontScale = 1 / this.unitsPerEm * fontSize;
+  var glyphs = this.stringToGlyphs(text, options);
+  var kerningLookups;
+  if (options.kerning) {
+    var script = options.script || this.position.getDefaultScriptName();
+    kerningLookups = this.position.getKerningTables(script, options.language);
+  }
+  for (var i = 0; i < glyphs.length; i += 1) {
+    var glyph = glyphs[i];
+    callback.call(this, glyph, x, y, fontSize, options);
+    if (glyph.advanceWidth) {
+      x += glyph.advanceWidth * fontScale;
+    }
+    if (options.kerning && i < glyphs.length - 1) {
+      var kerningValue = kerningLookups ? this.position.getKerningValue(kerningLookups, glyph.index, glyphs[i + 1].index) : this.getKerningValue(glyph, glyphs[i + 1]);
+      x += kerningValue * fontScale;
+    }
+    if (options.letterSpacing) {
+      x += options.letterSpacing * fontSize;
+    } else if (options.tracking) {
+      x += options.tracking / 1e3 * fontSize;
+    }
+  }
+  return x;
+};
+Font.prototype.getPath = function(text, x, y, fontSize, options) {
+  var fullPath = new Path();
+  this.forEachGlyph(text, x, y, fontSize, options, function(glyph, gX, gY, gFontSize) {
+    var glyphPath = glyph.getPath(gX, gY, gFontSize, options, this);
+    fullPath.extend(glyphPath);
+  });
+  return fullPath;
+};
+Font.prototype.getPaths = function(text, x, y, fontSize, options) {
+  var glyphPaths = [];
+  this.forEachGlyph(text, x, y, fontSize, options, function(glyph, gX, gY, gFontSize) {
+    var glyphPath = glyph.getPath(gX, gY, gFontSize, options, this);
+    glyphPaths.push(glyphPath);
+  });
+  return glyphPaths;
+};
+Font.prototype.getAdvanceWidth = function(text, fontSize, options) {
+  return this.forEachGlyph(text, 0, 0, fontSize, options, function() {
+  });
+};
+Font.prototype.draw = function(ctx, text, x, y, fontSize, options) {
+  this.getPath(text, x, y, fontSize, options).draw(ctx);
+};
+Font.prototype.drawPoints = function(ctx, text, x, y, fontSize, options) {
+  this.forEachGlyph(text, x, y, fontSize, options, function(glyph, gX, gY, gFontSize) {
+    glyph.drawPoints(ctx, gX, gY, gFontSize);
+  });
+};
+Font.prototype.drawMetrics = function(ctx, text, x, y, fontSize, options) {
+  this.forEachGlyph(text, x, y, fontSize, options, function(glyph, gX, gY, gFontSize) {
+    glyph.drawMetrics(ctx, gX, gY, gFontSize);
+  });
+};
+Font.prototype.getEnglishName = function(name) {
+  var translations = this.names[name];
+  if (translations) {
+    return translations.en;
+  }
+};
+Font.prototype.validate = function() {
+  var _this = this;
+  function assert(predicate, message) {
+  }
+  function assertNamePresent(name) {
+    var englishName = _this.getEnglishName(name);
+    assert(englishName && englishName.trim().length > 0);
+  }
+  assertNamePresent("fontFamily");
+  assertNamePresent("weightName");
+  assertNamePresent("manufacturer");
+  assertNamePresent("copyright");
+  assertNamePresent("version");
+  assert(this.unitsPerEm > 0);
+};
+Font.prototype.toTables = function() {
+  return sfnt.fontToTable(this);
+};
+Font.prototype.toBuffer = function() {
+  console.warn("Font.toBuffer is deprecated. Use Font.toArrayBuffer instead.");
+  return this.toArrayBuffer();
+};
+Font.prototype.toArrayBuffer = function() {
+  var sfntTable = this.toTables();
+  var bytes = sfntTable.encode();
+  var buffer = new ArrayBuffer(bytes.length);
+  var intArray = new Uint8Array(buffer);
+  for (var i = 0; i < bytes.length; i++) {
+    intArray[i] = bytes[i];
+  }
+  return buffer;
+};
+Font.prototype.download = function(fileName) {
+  var familyName = this.getEnglishName("fontFamily");
+  var styleName = this.getEnglishName("fontSubfamily");
+  fileName = fileName || familyName.replace(/\s/g, "") + "-" + styleName + ".otf";
+  var arrayBuffer = this.toArrayBuffer();
+  if (isBrowser()) {
+    window.URL = window.URL || window.webkitURL;
+    if (window.URL) {
+      var dataView = new DataView(arrayBuffer);
+      var blob = new Blob([dataView], { type: "font/opentype" });
+      var link = document.createElement("a");
+      link.href = window.URL.createObjectURL(blob);
+      link.download = fileName;
+      var event = document.createEvent("MouseEvents");
+      event.initEvent("click", true, false);
+      link.dispatchEvent(event);
+    } else {
+      console.warn("Font file could not be downloaded. Try using a different browser.");
+    }
+  } else {
+    var fs = require_fs();
+    var buffer = arrayBufferToNodeBuffer(arrayBuffer);
+    fs.writeFileSync(fileName, buffer);
+  }
+};
+Font.prototype.fsSelectionValues = {
+  ITALIC: 1,
+  //1
+  UNDERSCORE: 2,
+  //2
+  NEGATIVE: 4,
+  //4
+  OUTLINED: 8,
+  //8
+  STRIKEOUT: 16,
+  //16
+  BOLD: 32,
+  //32
+  REGULAR: 64,
+  //64
+  USER_TYPO_METRICS: 128,
+  //128
+  WWS: 256,
+  //256
+  OBLIQUE: 512
+  //512
+};
+Font.prototype.usWidthClasses = {
+  ULTRA_CONDENSED: 1,
+  EXTRA_CONDENSED: 2,
+  CONDENSED: 3,
+  SEMI_CONDENSED: 4,
+  MEDIUM: 5,
+  SEMI_EXPANDED: 6,
+  EXPANDED: 7,
+  EXTRA_EXPANDED: 8,
+  ULTRA_EXPANDED: 9
+};
+Font.prototype.usWeightClasses = {
+  THIN: 100,
+  EXTRA_LIGHT: 200,
+  LIGHT: 300,
+  NORMAL: 400,
+  MEDIUM: 500,
+  SEMI_BOLD: 600,
+  BOLD: 700,
+  EXTRA_BOLD: 800,
+  BLACK: 900
+};
 function addName(name, names) {
   var nameString = JSON.stringify(name);
   var nameID = 256;
@@ -5309,6 +11711,40 @@ function parseFvarTable(data, start, names) {
   }
   return { axes, instances };
 }
+var fvar = { make: makeFvarTable, parse: parseFvarTable };
+var attachList = function() {
+  return {
+    coverage: this.parsePointer(Parser.coverage),
+    attachPoints: this.parseList(Parser.pointer(Parser.uShortList))
+  };
+};
+var caretValue = function() {
+  var format = this.parseUShort();
+  check.argument(
+    format === 1 || format === 2 || format === 3,
+    "Unsupported CaretValue table version."
+  );
+  if (format === 1) {
+    return { coordinate: this.parseShort() };
+  } else if (format === 2) {
+    return { pointindex: this.parseShort() };
+  } else if (format === 3) {
+    return { coordinate: this.parseShort() };
+  }
+};
+var ligGlyph = function() {
+  return this.parseList(Parser.pointer(caretValue));
+};
+var ligCaretList = function() {
+  return {
+    coverage: this.parsePointer(Parser.coverage),
+    ligGlyphs: this.parseList(Parser.pointer(ligGlyph))
+  };
+};
+var markGlyphSets = function() {
+  this.parseUShort();
+  return this.parseList(Parser.pointer(Parser.coverage));
+};
 function parseGDEFTable(data, start) {
   start = start || 0;
   var p = new Parser(data, start);
@@ -5329,6 +11765,93 @@ function parseGDEFTable(data, start) {
   }
   return gdef2;
 }
+var gdef = { parse: parseGDEFTable };
+var subtableParsers$1 = new Array(10);
+subtableParsers$1[1] = function parseLookup12() {
+  var start = this.offset + this.relativeOffset;
+  var posformat = this.parseUShort();
+  if (posformat === 1) {
+    return {
+      posFormat: 1,
+      coverage: this.parsePointer(Parser.coverage),
+      value: this.parseValueRecord()
+    };
+  } else if (posformat === 2) {
+    return {
+      posFormat: 2,
+      coverage: this.parsePointer(Parser.coverage),
+      values: this.parseValueRecordList()
+    };
+  }
+  check.assert(false, "0x" + start.toString(16) + ": GPOS lookup type 1 format must be 1 or 2.");
+};
+subtableParsers$1[2] = function parseLookup22() {
+  var start = this.offset + this.relativeOffset;
+  var posFormat = this.parseUShort();
+  check.assert(posFormat === 1 || posFormat === 2, "0x" + start.toString(16) + ": GPOS lookup type 2 format must be 1 or 2.");
+  var coverage = this.parsePointer(Parser.coverage);
+  var valueFormat1 = this.parseUShort();
+  var valueFormat2 = this.parseUShort();
+  if (posFormat === 1) {
+    return {
+      posFormat,
+      coverage,
+      valueFormat1,
+      valueFormat2,
+      pairSets: this.parseList(Parser.pointer(Parser.list(function() {
+        return {
+          // pairValueRecord
+          secondGlyph: this.parseUShort(),
+          value1: this.parseValueRecord(valueFormat1),
+          value2: this.parseValueRecord(valueFormat2)
+        };
+      })))
+    };
+  } else if (posFormat === 2) {
+    var classDef1 = this.parsePointer(Parser.classDef);
+    var classDef2 = this.parsePointer(Parser.classDef);
+    var class1Count = this.parseUShort();
+    var class2Count = this.parseUShort();
+    return {
+      // Class Pair Adjustment
+      posFormat,
+      coverage,
+      valueFormat1,
+      valueFormat2,
+      classDef1,
+      classDef2,
+      class1Count,
+      class2Count,
+      classRecords: this.parseList(class1Count, Parser.list(class2Count, function() {
+        return {
+          value1: this.parseValueRecord(valueFormat1),
+          value2: this.parseValueRecord(valueFormat2)
+        };
+      }))
+    };
+  }
+};
+subtableParsers$1[3] = function parseLookup32() {
+  return { error: "GPOS Lookup 3 not supported" };
+};
+subtableParsers$1[4] = function parseLookup42() {
+  return { error: "GPOS Lookup 4 not supported" };
+};
+subtableParsers$1[5] = function parseLookup52() {
+  return { error: "GPOS Lookup 5 not supported" };
+};
+subtableParsers$1[6] = function parseLookup62() {
+  return { error: "GPOS Lookup 6 not supported" };
+};
+subtableParsers$1[7] = function parseLookup72() {
+  return { error: "GPOS Lookup 7 not supported" };
+};
+subtableParsers$1[8] = function parseLookup82() {
+  return { error: "GPOS Lookup 8 not supported" };
+};
+subtableParsers$1[9] = function parseLookup9() {
+  return { error: "GPOS Lookup 9 not supported" };
+};
 function parseGposTable(data, start) {
   start = start || 0;
   var p = new Parser(data, start);
@@ -5351,6 +11874,7 @@ function parseGposTable(data, start) {
     };
   }
 }
+var subtableMakers$1 = new Array(10);
 function makeGposTable(gpos2) {
   return new table.Table("GPOS", [
     { name: "version", type: "ULONG", value: 65536 },
@@ -5359,6 +11883,7 @@ function makeGposTable(gpos2) {
     { name: "lookups", type: "TABLE", value: new table.LookupList(gpos2.lookups, subtableMakers$1) }
   ]);
 }
+var gpos = { parse: parseGposTable, make: makeGposTable };
 function parseWindowsKernTable(p) {
   var pairs = {};
   p.skip("uShort");
@@ -5409,6 +11934,7 @@ function parseKernTable(data, start) {
     throw new Error("Unsupported kern table version (" + tableVersion + ").");
   }
 }
+var kern = { parse: parseKernTable };
 function parseLocaTable(data, start, numGlyphs, shortVersion) {
   var p = new parse.Parser(data, start);
   var parseFn = shortVersion ? p.parseUShort : p.parseULong;
@@ -5422,6 +11948,7 @@ function parseLocaTable(data, start, numGlyphs, shortVersion) {
   }
   return glyphOffsets;
 }
+var loca = { parse: parseLocaTable };
 function loadFromFile(path, callback) {
   var fs = require_fs();
   fs.readFile(path, function(err, buffer) {
@@ -5711,6543 +12238,9 @@ function load(url, callback, opt) {
     });
   });
 }
-var TINF_OK, TINF_DATA_ERROR, sltree, sdtree, length_bits, length_base, dist_bits, dist_base, clcidx, code_tree, lengths, offs, tinyInflate, check, LIMIT16, LIMIT32, decode, encode, sizeOf, eightBitMacEncodings, macEncodingTableCache, macEncodingCacheKeys, getMacEncodingTable, wmm, table, typeOffsets, langSysTable, parse, cmap, cffStandardStrings, cffStandardEncoding, cffExpertEncoding, standardNames, draw, glyphset, TOP_DICT_META, PRIVATE_DICT_META, cff, head, hhea, hmtx, ltag, maxp, nameTableNames, macLanguages, macLanguageToScript, windowsLanguages, utf16, macScriptEncodings, macLanguageEncodings, _name, unicodeRanges, os2, post, subtableParsers, lookupRecordDesc, subtableMakers, gsub, meta, sfnt, glyf, instructionTable, exec, execGlyph, execComponent, roundSuper, xUnitVector, yUnitVector, HPZero, defaultState, arabicWordCheck, arabicSentenceCheck, SUBSTITUTIONS, latinWordCheck, fvar, attachList, caretValue, ligGlyph, ligCaretList, markGlyphSets, gdef, subtableParsers$1, subtableMakers$1, gpos, kern, loca;
-var init_opentype_module = __esm({
-  "node_modules/opentype.js/dist/opentype.module.js"() {
-    if (!String.prototype.codePointAt) {
-      (function() {
-        var defineProperty = (function() {
-          try {
-            var object = {};
-            var $defineProperty = Object.defineProperty;
-            var result = $defineProperty(object, object, object) && $defineProperty;
-          } catch (error) {
-          }
-          return result;
-        })();
-        var codePointAt = function(position) {
-          if (this == null) {
-            throw TypeError();
-          }
-          var string = String(this);
-          var size = string.length;
-          var index = position ? Number(position) : 0;
-          if (index != index) {
-            index = 0;
-          }
-          if (index < 0 || index >= size) {
-            return void 0;
-          }
-          var first = string.charCodeAt(index);
-          var second;
-          if (
-            // check if it’s the start of a surrogate pair
-            first >= 55296 && first <= 56319 && // high surrogate
-            size > index + 1
-          ) {
-            second = string.charCodeAt(index + 1);
-            if (second >= 56320 && second <= 57343) {
-              return (first - 55296) * 1024 + second - 56320 + 65536;
-            }
-          }
-          return first;
-        };
-        if (defineProperty) {
-          defineProperty(String.prototype, "codePointAt", {
-            "value": codePointAt,
-            "configurable": true,
-            "writable": true
-          });
-        } else {
-          String.prototype.codePointAt = codePointAt;
-        }
-      })();
-    }
-    TINF_OK = 0;
-    TINF_DATA_ERROR = -3;
-    sltree = new Tree();
-    sdtree = new Tree();
-    length_bits = new Uint8Array(30);
-    length_base = new Uint16Array(30);
-    dist_bits = new Uint8Array(30);
-    dist_base = new Uint16Array(30);
-    clcidx = new Uint8Array([
-      16,
-      17,
-      18,
-      0,
-      8,
-      7,
-      9,
-      6,
-      10,
-      5,
-      11,
-      4,
-      12,
-      3,
-      13,
-      2,
-      14,
-      1,
-      15
-    ]);
-    code_tree = new Tree();
-    lengths = new Uint8Array(288 + 32);
-    offs = new Uint16Array(16);
-    tinf_build_fixed_trees(sltree, sdtree);
-    tinf_build_bits_base(length_bits, length_base, 4, 3);
-    tinf_build_bits_base(dist_bits, dist_base, 2, 1);
-    length_bits[28] = 0;
-    length_base[28] = 258;
-    tinyInflate = tinf_uncompress;
-    BoundingBox.prototype.isEmpty = function() {
-      return isNaN(this.x1) || isNaN(this.y1) || isNaN(this.x2) || isNaN(this.y2);
-    };
-    BoundingBox.prototype.addPoint = function(x, y) {
-      if (typeof x === "number") {
-        if (isNaN(this.x1) || isNaN(this.x2)) {
-          this.x1 = x;
-          this.x2 = x;
-        }
-        if (x < this.x1) {
-          this.x1 = x;
-        }
-        if (x > this.x2) {
-          this.x2 = x;
-        }
-      }
-      if (typeof y === "number") {
-        if (isNaN(this.y1) || isNaN(this.y2)) {
-          this.y1 = y;
-          this.y2 = y;
-        }
-        if (y < this.y1) {
-          this.y1 = y;
-        }
-        if (y > this.y2) {
-          this.y2 = y;
-        }
-      }
-    };
-    BoundingBox.prototype.addX = function(x) {
-      this.addPoint(x, null);
-    };
-    BoundingBox.prototype.addY = function(y) {
-      this.addPoint(null, y);
-    };
-    BoundingBox.prototype.addBezier = function(x0, y0, x1, y1, x2, y2, x, y) {
-      var p0 = [x0, y0];
-      var p1 = [x1, y1];
-      var p2 = [x2, y2];
-      var p3 = [x, y];
-      this.addPoint(x0, y0);
-      this.addPoint(x, y);
-      for (var i = 0; i <= 1; i++) {
-        var b = 6 * p0[i] - 12 * p1[i] + 6 * p2[i];
-        var a = -3 * p0[i] + 9 * p1[i] - 9 * p2[i] + 3 * p3[i];
-        var c = 3 * p1[i] - 3 * p0[i];
-        if (a === 0) {
-          if (b === 0) {
-            continue;
-          }
-          var t = -c / b;
-          if (0 < t && t < 1) {
-            if (i === 0) {
-              this.addX(derive(p0[i], p1[i], p2[i], p3[i], t));
-            }
-            if (i === 1) {
-              this.addY(derive(p0[i], p1[i], p2[i], p3[i], t));
-            }
-          }
-          continue;
-        }
-        var b2ac = Math.pow(b, 2) - 4 * c * a;
-        if (b2ac < 0) {
-          continue;
-        }
-        var t1 = (-b + Math.sqrt(b2ac)) / (2 * a);
-        if (0 < t1 && t1 < 1) {
-          if (i === 0) {
-            this.addX(derive(p0[i], p1[i], p2[i], p3[i], t1));
-          }
-          if (i === 1) {
-            this.addY(derive(p0[i], p1[i], p2[i], p3[i], t1));
-          }
-        }
-        var t2 = (-b - Math.sqrt(b2ac)) / (2 * a);
-        if (0 < t2 && t2 < 1) {
-          if (i === 0) {
-            this.addX(derive(p0[i], p1[i], p2[i], p3[i], t2));
-          }
-          if (i === 1) {
-            this.addY(derive(p0[i], p1[i], p2[i], p3[i], t2));
-          }
-        }
-      }
-    };
-    BoundingBox.prototype.addQuad = function(x0, y0, x1, y1, x, y) {
-      var cp1x = x0 + 2 / 3 * (x1 - x0);
-      var cp1y = y0 + 2 / 3 * (y1 - y0);
-      var cp2x = cp1x + 1 / 3 * (x - x0);
-      var cp2y = cp1y + 1 / 3 * (y - y0);
-      this.addBezier(x0, y0, cp1x, cp1y, cp2x, cp2y, x, y);
-    };
-    Path.prototype.moveTo = function(x, y) {
-      this.commands.push({
-        type: "M",
-        x,
-        y
-      });
-    };
-    Path.prototype.lineTo = function(x, y) {
-      this.commands.push({
-        type: "L",
-        x,
-        y
-      });
-    };
-    Path.prototype.curveTo = Path.prototype.bezierCurveTo = function(x1, y1, x2, y2, x, y) {
-      this.commands.push({
-        type: "C",
-        x1,
-        y1,
-        x2,
-        y2,
-        x,
-        y
-      });
-    };
-    Path.prototype.quadTo = Path.prototype.quadraticCurveTo = function(x1, y1, x, y) {
-      this.commands.push({
-        type: "Q",
-        x1,
-        y1,
-        x,
-        y
-      });
-    };
-    Path.prototype.close = Path.prototype.closePath = function() {
-      this.commands.push({
-        type: "Z"
-      });
-    };
-    Path.prototype.extend = function(pathOrCommands) {
-      if (pathOrCommands.commands) {
-        pathOrCommands = pathOrCommands.commands;
-      } else if (pathOrCommands instanceof BoundingBox) {
-        var box = pathOrCommands;
-        this.moveTo(box.x1, box.y1);
-        this.lineTo(box.x2, box.y1);
-        this.lineTo(box.x2, box.y2);
-        this.lineTo(box.x1, box.y2);
-        this.close();
-        return;
-      }
-      Array.prototype.push.apply(this.commands, pathOrCommands);
-    };
-    Path.prototype.getBoundingBox = function() {
-      var box = new BoundingBox();
-      var startX = 0;
-      var startY = 0;
-      var prevX = 0;
-      var prevY = 0;
-      for (var i = 0; i < this.commands.length; i++) {
-        var cmd = this.commands[i];
-        switch (cmd.type) {
-          case "M":
-            box.addPoint(cmd.x, cmd.y);
-            startX = prevX = cmd.x;
-            startY = prevY = cmd.y;
-            break;
-          case "L":
-            box.addPoint(cmd.x, cmd.y);
-            prevX = cmd.x;
-            prevY = cmd.y;
-            break;
-          case "Q":
-            box.addQuad(prevX, prevY, cmd.x1, cmd.y1, cmd.x, cmd.y);
-            prevX = cmd.x;
-            prevY = cmd.y;
-            break;
-          case "C":
-            box.addBezier(prevX, prevY, cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x, cmd.y);
-            prevX = cmd.x;
-            prevY = cmd.y;
-            break;
-          case "Z":
-            prevX = startX;
-            prevY = startY;
-            break;
-          default:
-            throw new Error("Unexpected path command " + cmd.type);
-        }
-      }
-      if (box.isEmpty()) {
-        box.addPoint(0, 0);
-      }
-      return box;
-    };
-    Path.prototype.draw = function(ctx) {
-      ctx.beginPath();
-      for (var i = 0; i < this.commands.length; i += 1) {
-        var cmd = this.commands[i];
-        if (cmd.type === "M") {
-          ctx.moveTo(cmd.x, cmd.y);
-        } else if (cmd.type === "L") {
-          ctx.lineTo(cmd.x, cmd.y);
-        } else if (cmd.type === "C") {
-          ctx.bezierCurveTo(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x, cmd.y);
-        } else if (cmd.type === "Q") {
-          ctx.quadraticCurveTo(cmd.x1, cmd.y1, cmd.x, cmd.y);
-        } else if (cmd.type === "Z") {
-          ctx.closePath();
-        }
-      }
-      if (this.fill) {
-        ctx.fillStyle = this.fill;
-        ctx.fill();
-      }
-      if (this.stroke) {
-        ctx.strokeStyle = this.stroke;
-        ctx.lineWidth = this.strokeWidth;
-        ctx.stroke();
-      }
-    };
-    Path.prototype.toPathData = function(decimalPlaces) {
-      decimalPlaces = decimalPlaces !== void 0 ? decimalPlaces : 2;
-      function floatToString(v) {
-        if (Math.round(v) === v) {
-          return "" + Math.round(v);
-        } else {
-          return v.toFixed(decimalPlaces);
-        }
-      }
-      function packValues() {
-        var arguments$1 = arguments;
-        var s = "";
-        for (var i2 = 0; i2 < arguments.length; i2 += 1) {
-          var v = arguments$1[i2];
-          if (v >= 0 && i2 > 0) {
-            s += " ";
-          }
-          s += floatToString(v);
-        }
-        return s;
-      }
-      var d = "";
-      for (var i = 0; i < this.commands.length; i += 1) {
-        var cmd = this.commands[i];
-        if (cmd.type === "M") {
-          d += "M" + packValues(cmd.x, cmd.y);
-        } else if (cmd.type === "L") {
-          d += "L" + packValues(cmd.x, cmd.y);
-        } else if (cmd.type === "C") {
-          d += "C" + packValues(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x, cmd.y);
-        } else if (cmd.type === "Q") {
-          d += "Q" + packValues(cmd.x1, cmd.y1, cmd.x, cmd.y);
-        } else if (cmd.type === "Z") {
-          d += "Z";
-        }
-      }
-      return d;
-    };
-    Path.prototype.toSVG = function(decimalPlaces) {
-      var svg = '<path d="';
-      svg += this.toPathData(decimalPlaces);
-      svg += '"';
-      if (this.fill && this.fill !== "black") {
-        if (this.fill === null) {
-          svg += ' fill="none"';
-        } else {
-          svg += ' fill="' + this.fill + '"';
-        }
-      }
-      if (this.stroke) {
-        svg += ' stroke="' + this.stroke + '" stroke-width="' + this.strokeWidth + '"';
-      }
-      svg += "/>";
-      return svg;
-    };
-    Path.prototype.toDOMElement = function(decimalPlaces) {
-      var temporaryPath = this.toPathData(decimalPlaces);
-      var newPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      newPath.setAttribute("d", temporaryPath);
-      return newPath;
-    };
-    check = { fail, argument, assert: argument };
-    LIMIT16 = 32768;
-    LIMIT32 = 2147483648;
-    decode = {};
-    encode = {};
-    sizeOf = {};
-    encode.BYTE = function(v) {
-      check.argument(v >= 0 && v <= 255, "Byte value should be between 0 and 255.");
-      return [v];
-    };
-    sizeOf.BYTE = constant(1);
-    encode.CHAR = function(v) {
-      return [v.charCodeAt(0)];
-    };
-    sizeOf.CHAR = constant(1);
-    encode.CHARARRAY = function(v) {
-      if (typeof v === "undefined") {
-        v = "";
-        console.warn("Undefined CHARARRAY encountered and treated as an empty string. This is probably caused by a missing glyph name.");
-      }
-      var b = [];
-      for (var i = 0; i < v.length; i += 1) {
-        b[i] = v.charCodeAt(i);
-      }
-      return b;
-    };
-    sizeOf.CHARARRAY = function(v) {
-      if (typeof v === "undefined") {
-        return 0;
-      }
-      return v.length;
-    };
-    encode.USHORT = function(v) {
-      return [v >> 8 & 255, v & 255];
-    };
-    sizeOf.USHORT = constant(2);
-    encode.SHORT = function(v) {
-      if (v >= LIMIT16) {
-        v = -(2 * LIMIT16 - v);
-      }
-      return [v >> 8 & 255, v & 255];
-    };
-    sizeOf.SHORT = constant(2);
-    encode.UINT24 = function(v) {
-      return [v >> 16 & 255, v >> 8 & 255, v & 255];
-    };
-    sizeOf.UINT24 = constant(3);
-    encode.ULONG = function(v) {
-      return [v >> 24 & 255, v >> 16 & 255, v >> 8 & 255, v & 255];
-    };
-    sizeOf.ULONG = constant(4);
-    encode.LONG = function(v) {
-      if (v >= LIMIT32) {
-        v = -(2 * LIMIT32 - v);
-      }
-      return [v >> 24 & 255, v >> 16 & 255, v >> 8 & 255, v & 255];
-    };
-    sizeOf.LONG = constant(4);
-    encode.FIXED = encode.ULONG;
-    sizeOf.FIXED = sizeOf.ULONG;
-    encode.FWORD = encode.SHORT;
-    sizeOf.FWORD = sizeOf.SHORT;
-    encode.UFWORD = encode.USHORT;
-    sizeOf.UFWORD = sizeOf.USHORT;
-    encode.LONGDATETIME = function(v) {
-      return [0, 0, 0, 0, v >> 24 & 255, v >> 16 & 255, v >> 8 & 255, v & 255];
-    };
-    sizeOf.LONGDATETIME = constant(8);
-    encode.TAG = function(v) {
-      check.argument(v.length === 4, "Tag should be exactly 4 ASCII characters.");
-      return [
-        v.charCodeAt(0),
-        v.charCodeAt(1),
-        v.charCodeAt(2),
-        v.charCodeAt(3)
-      ];
-    };
-    sizeOf.TAG = constant(4);
-    encode.Card8 = encode.BYTE;
-    sizeOf.Card8 = sizeOf.BYTE;
-    encode.Card16 = encode.USHORT;
-    sizeOf.Card16 = sizeOf.USHORT;
-    encode.OffSize = encode.BYTE;
-    sizeOf.OffSize = sizeOf.BYTE;
-    encode.SID = encode.USHORT;
-    sizeOf.SID = sizeOf.USHORT;
-    encode.NUMBER = function(v) {
-      if (v >= -107 && v <= 107) {
-        return [v + 139];
-      } else if (v >= 108 && v <= 1131) {
-        v = v - 108;
-        return [(v >> 8) + 247, v & 255];
-      } else if (v >= -1131 && v <= -108) {
-        v = -v - 108;
-        return [(v >> 8) + 251, v & 255];
-      } else if (v >= -32768 && v <= 32767) {
-        return encode.NUMBER16(v);
-      } else {
-        return encode.NUMBER32(v);
-      }
-    };
-    sizeOf.NUMBER = function(v) {
-      return encode.NUMBER(v).length;
-    };
-    encode.NUMBER16 = function(v) {
-      return [28, v >> 8 & 255, v & 255];
-    };
-    sizeOf.NUMBER16 = constant(3);
-    encode.NUMBER32 = function(v) {
-      return [29, v >> 24 & 255, v >> 16 & 255, v >> 8 & 255, v & 255];
-    };
-    sizeOf.NUMBER32 = constant(5);
-    encode.REAL = function(v) {
-      var value = v.toString();
-      var m = /\.(\d*?)(?:9{5,20}|0{5,20})\d{0,2}(?:e(.+)|$)/.exec(value);
-      if (m) {
-        var epsilon = parseFloat("1e" + ((m[2] ? +m[2] : 0) + m[1].length));
-        value = (Math.round(v * epsilon) / epsilon).toString();
-      }
-      var nibbles = "";
-      for (var i = 0, ii = value.length; i < ii; i += 1) {
-        var c = value[i];
-        if (c === "e") {
-          nibbles += value[++i] === "-" ? "c" : "b";
-        } else if (c === ".") {
-          nibbles += "a";
-        } else if (c === "-") {
-          nibbles += "e";
-        } else {
-          nibbles += c;
-        }
-      }
-      nibbles += nibbles.length & 1 ? "f" : "ff";
-      var out = [30];
-      for (var i$1 = 0, ii$1 = nibbles.length; i$1 < ii$1; i$1 += 2) {
-        out.push(parseInt(nibbles.substr(i$1, 2), 16));
-      }
-      return out;
-    };
-    sizeOf.REAL = function(v) {
-      return encode.REAL(v).length;
-    };
-    encode.NAME = encode.CHARARRAY;
-    sizeOf.NAME = sizeOf.CHARARRAY;
-    encode.STRING = encode.CHARARRAY;
-    sizeOf.STRING = sizeOf.CHARARRAY;
-    decode.UTF8 = function(data, offset, numBytes) {
-      var codePoints = [];
-      var numChars = numBytes;
-      for (var j = 0; j < numChars; j++, offset += 1) {
-        codePoints[j] = data.getUint8(offset);
-      }
-      return String.fromCharCode.apply(null, codePoints);
-    };
-    decode.UTF16 = function(data, offset, numBytes) {
-      var codePoints = [];
-      var numChars = numBytes / 2;
-      for (var j = 0; j < numChars; j++, offset += 2) {
-        codePoints[j] = data.getUint16(offset);
-      }
-      return String.fromCharCode.apply(null, codePoints);
-    };
-    encode.UTF16 = function(v) {
-      var b = [];
-      for (var i = 0; i < v.length; i += 1) {
-        var codepoint = v.charCodeAt(i);
-        b[b.length] = codepoint >> 8 & 255;
-        b[b.length] = codepoint & 255;
-      }
-      return b;
-    };
-    sizeOf.UTF16 = function(v) {
-      return v.length * 2;
-    };
-    eightBitMacEncodings = {
-      "x-mac-croatian": (
-        // Python: 'mac_croatian'
-        "\xC4\xC5\xC7\xC9\xD1\xD6\xDC\xE1\xE0\xE2\xE4\xE3\xE5\xE7\xE9\xE8\xEA\xEB\xED\xEC\xEE\xEF\xF1\xF3\xF2\xF4\xF6\xF5\xFA\xF9\xFB\xFC\u2020\xB0\xA2\xA3\xA7\u2022\xB6\xDF\xAE\u0160\u2122\xB4\xA8\u2260\u017D\xD8\u221E\xB1\u2264\u2265\u2206\xB5\u2202\u2211\u220F\u0161\u222B\xAA\xBA\u03A9\u017E\xF8\xBF\xA1\xAC\u221A\u0192\u2248\u0106\xAB\u010C\u2026\xA0\xC0\xC3\xD5\u0152\u0153\u0110\u2014\u201C\u201D\u2018\u2019\xF7\u25CA\uF8FF\xA9\u2044\u20AC\u2039\u203A\xC6\xBB\u2013\xB7\u201A\u201E\u2030\xC2\u0107\xC1\u010D\xC8\xCD\xCE\xCF\xCC\xD3\xD4\u0111\xD2\xDA\xDB\xD9\u0131\u02C6\u02DC\xAF\u03C0\xCB\u02DA\xB8\xCA\xE6\u02C7"
-      ),
-      "x-mac-cyrillic": (
-        // Python: 'mac_cyrillic'
-        "\u0410\u0411\u0412\u0413\u0414\u0415\u0416\u0417\u0418\u0419\u041A\u041B\u041C\u041D\u041E\u041F\u0420\u0421\u0422\u0423\u0424\u0425\u0426\u0427\u0428\u0429\u042A\u042B\u042C\u042D\u042E\u042F\u2020\xB0\u0490\xA3\xA7\u2022\xB6\u0406\xAE\xA9\u2122\u0402\u0452\u2260\u0403\u0453\u221E\xB1\u2264\u2265\u0456\xB5\u0491\u0408\u0404\u0454\u0407\u0457\u0409\u0459\u040A\u045A\u0458\u0405\xAC\u221A\u0192\u2248\u2206\xAB\xBB\u2026\xA0\u040B\u045B\u040C\u045C\u0455\u2013\u2014\u201C\u201D\u2018\u2019\xF7\u201E\u040E\u045E\u040F\u045F\u2116\u0401\u0451\u044F\u0430\u0431\u0432\u0433\u0434\u0435\u0436\u0437\u0438\u0439\u043A\u043B\u043C\u043D\u043E\u043F\u0440\u0441\u0442\u0443\u0444\u0445\u0446\u0447\u0448\u0449\u044A\u044B\u044C\u044D\u044E"
-      ),
-      "x-mac-gaelic": (
-        // http://unicode.org/Public/MAPPINGS/VENDORS/APPLE/GAELIC.TXT
-        "\xC4\xC5\xC7\xC9\xD1\xD6\xDC\xE1\xE0\xE2\xE4\xE3\xE5\xE7\xE9\xE8\xEA\xEB\xED\xEC\xEE\xEF\xF1\xF3\xF2\xF4\xF6\xF5\xFA\xF9\xFB\xFC\u2020\xB0\xA2\xA3\xA7\u2022\xB6\xDF\xAE\xA9\u2122\xB4\xA8\u2260\xC6\xD8\u1E02\xB1\u2264\u2265\u1E03\u010A\u010B\u1E0A\u1E0B\u1E1E\u1E1F\u0120\u0121\u1E40\xE6\xF8\u1E41\u1E56\u1E57\u027C\u0192\u017F\u1E60\xAB\xBB\u2026\xA0\xC0\xC3\xD5\u0152\u0153\u2013\u2014\u201C\u201D\u2018\u2019\u1E61\u1E9B\xFF\u0178\u1E6A\u20AC\u2039\u203A\u0176\u0177\u1E6B\xB7\u1EF2\u1EF3\u204A\xC2\xCA\xC1\xCB\xC8\xCD\xCE\xCF\xCC\xD3\xD4\u2663\xD2\xDA\xDB\xD9\u0131\xDD\xFD\u0174\u0175\u1E84\u1E85\u1E80\u1E81\u1E82\u1E83"
-      ),
-      "x-mac-greek": (
-        // Python: 'mac_greek'
-        "\xC4\xB9\xB2\xC9\xB3\xD6\xDC\u0385\xE0\xE2\xE4\u0384\xA8\xE7\xE9\xE8\xEA\xEB\xA3\u2122\xEE\xEF\u2022\xBD\u2030\xF4\xF6\xA6\u20AC\xF9\xFB\xFC\u2020\u0393\u0394\u0398\u039B\u039E\u03A0\xDF\xAE\xA9\u03A3\u03AA\xA7\u2260\xB0\xB7\u0391\xB1\u2264\u2265\xA5\u0392\u0395\u0396\u0397\u0399\u039A\u039C\u03A6\u03AB\u03A8\u03A9\u03AC\u039D\xAC\u039F\u03A1\u2248\u03A4\xAB\xBB\u2026\xA0\u03A5\u03A7\u0386\u0388\u0153\u2013\u2015\u201C\u201D\u2018\u2019\xF7\u0389\u038A\u038C\u038E\u03AD\u03AE\u03AF\u03CC\u038F\u03CD\u03B1\u03B2\u03C8\u03B4\u03B5\u03C6\u03B3\u03B7\u03B9\u03BE\u03BA\u03BB\u03BC\u03BD\u03BF\u03C0\u03CE\u03C1\u03C3\u03C4\u03B8\u03C9\u03C2\u03C7\u03C5\u03B6\u03CA\u03CB\u0390\u03B0\xAD"
-      ),
-      "x-mac-icelandic": (
-        // Python: 'mac_iceland'
-        "\xC4\xC5\xC7\xC9\xD1\xD6\xDC\xE1\xE0\xE2\xE4\xE3\xE5\xE7\xE9\xE8\xEA\xEB\xED\xEC\xEE\xEF\xF1\xF3\xF2\xF4\xF6\xF5\xFA\xF9\xFB\xFC\xDD\xB0\xA2\xA3\xA7\u2022\xB6\xDF\xAE\xA9\u2122\xB4\xA8\u2260\xC6\xD8\u221E\xB1\u2264\u2265\xA5\xB5\u2202\u2211\u220F\u03C0\u222B\xAA\xBA\u03A9\xE6\xF8\xBF\xA1\xAC\u221A\u0192\u2248\u2206\xAB\xBB\u2026\xA0\xC0\xC3\xD5\u0152\u0153\u2013\u2014\u201C\u201D\u2018\u2019\xF7\u25CA\xFF\u0178\u2044\u20AC\xD0\xF0\xDE\xFE\xFD\xB7\u201A\u201E\u2030\xC2\xCA\xC1\xCB\xC8\xCD\xCE\xCF\xCC\xD3\xD4\uF8FF\xD2\xDA\xDB\xD9\u0131\u02C6\u02DC\xAF\u02D8\u02D9\u02DA\xB8\u02DD\u02DB\u02C7"
-      ),
-      "x-mac-inuit": (
-        // http://unicode.org/Public/MAPPINGS/VENDORS/APPLE/INUIT.TXT
-        "\u1403\u1404\u1405\u1406\u140A\u140B\u1431\u1432\u1433\u1434\u1438\u1439\u1449\u144E\u144F\u1450\u1451\u1455\u1456\u1466\u146D\u146E\u146F\u1470\u1472\u1473\u1483\u148B\u148C\u148D\u148E\u1490\u1491\xB0\u14A1\u14A5\u14A6\u2022\xB6\u14A7\xAE\xA9\u2122\u14A8\u14AA\u14AB\u14BB\u14C2\u14C3\u14C4\u14C5\u14C7\u14C8\u14D0\u14EF\u14F0\u14F1\u14F2\u14F4\u14F5\u1505\u14D5\u14D6\u14D7\u14D8\u14DA\u14DB\u14EA\u1528\u1529\u152A\u152B\u152D\u2026\xA0\u152E\u153E\u1555\u1556\u1557\u2013\u2014\u201C\u201D\u2018\u2019\u1558\u1559\u155A\u155D\u1546\u1547\u1548\u1549\u154B\u154C\u1550\u157F\u1580\u1581\u1582\u1583\u1584\u1585\u158F\u1590\u1591\u1592\u1593\u1594\u1595\u1671\u1672\u1673\u1674\u1675\u1676\u1596\u15A0\u15A1\u15A2\u15A3\u15A4\u15A5\u15A6\u157C\u0141\u0142"
-      ),
-      "x-mac-ce": (
-        // Python: 'mac_latin2'
-        "\xC4\u0100\u0101\xC9\u0104\xD6\xDC\xE1\u0105\u010C\xE4\u010D\u0106\u0107\xE9\u0179\u017A\u010E\xED\u010F\u0112\u0113\u0116\xF3\u0117\xF4\xF6\xF5\xFA\u011A\u011B\xFC\u2020\xB0\u0118\xA3\xA7\u2022\xB6\xDF\xAE\xA9\u2122\u0119\xA8\u2260\u0123\u012E\u012F\u012A\u2264\u2265\u012B\u0136\u2202\u2211\u0142\u013B\u013C\u013D\u013E\u0139\u013A\u0145\u0146\u0143\xAC\u221A\u0144\u0147\u2206\xAB\xBB\u2026\xA0\u0148\u0150\xD5\u0151\u014C\u2013\u2014\u201C\u201D\u2018\u2019\xF7\u25CA\u014D\u0154\u0155\u0158\u2039\u203A\u0159\u0156\u0157\u0160\u201A\u201E\u0161\u015A\u015B\xC1\u0164\u0165\xCD\u017D\u017E\u016A\xD3\xD4\u016B\u016E\xDA\u016F\u0170\u0171\u0172\u0173\xDD\xFD\u0137\u017B\u0141\u017C\u0122\u02C7"
-      ),
-      macintosh: (
-        // Python: 'mac_roman'
-        "\xC4\xC5\xC7\xC9\xD1\xD6\xDC\xE1\xE0\xE2\xE4\xE3\xE5\xE7\xE9\xE8\xEA\xEB\xED\xEC\xEE\xEF\xF1\xF3\xF2\xF4\xF6\xF5\xFA\xF9\xFB\xFC\u2020\xB0\xA2\xA3\xA7\u2022\xB6\xDF\xAE\xA9\u2122\xB4\xA8\u2260\xC6\xD8\u221E\xB1\u2264\u2265\xA5\xB5\u2202\u2211\u220F\u03C0\u222B\xAA\xBA\u03A9\xE6\xF8\xBF\xA1\xAC\u221A\u0192\u2248\u2206\xAB\xBB\u2026\xA0\xC0\xC3\xD5\u0152\u0153\u2013\u2014\u201C\u201D\u2018\u2019\xF7\u25CA\xFF\u0178\u2044\u20AC\u2039\u203A\uFB01\uFB02\u2021\xB7\u201A\u201E\u2030\xC2\xCA\xC1\xCB\xC8\xCD\xCE\xCF\xCC\xD3\xD4\uF8FF\xD2\xDA\xDB\xD9\u0131\u02C6\u02DC\xAF\u02D8\u02D9\u02DA\xB8\u02DD\u02DB\u02C7"
-      ),
-      "x-mac-romanian": (
-        // Python: 'mac_romanian'
-        "\xC4\xC5\xC7\xC9\xD1\xD6\xDC\xE1\xE0\xE2\xE4\xE3\xE5\xE7\xE9\xE8\xEA\xEB\xED\xEC\xEE\xEF\xF1\xF3\xF2\xF4\xF6\xF5\xFA\xF9\xFB\xFC\u2020\xB0\xA2\xA3\xA7\u2022\xB6\xDF\xAE\xA9\u2122\xB4\xA8\u2260\u0102\u0218\u221E\xB1\u2264\u2265\xA5\xB5\u2202\u2211\u220F\u03C0\u222B\xAA\xBA\u03A9\u0103\u0219\xBF\xA1\xAC\u221A\u0192\u2248\u2206\xAB\xBB\u2026\xA0\xC0\xC3\xD5\u0152\u0153\u2013\u2014\u201C\u201D\u2018\u2019\xF7\u25CA\xFF\u0178\u2044\u20AC\u2039\u203A\u021A\u021B\u2021\xB7\u201A\u201E\u2030\xC2\xCA\xC1\xCB\xC8\xCD\xCE\xCF\xCC\xD3\xD4\uF8FF\xD2\xDA\xDB\xD9\u0131\u02C6\u02DC\xAF\u02D8\u02D9\u02DA\xB8\u02DD\u02DB\u02C7"
-      ),
-      "x-mac-turkish": (
-        // Python: 'mac_turkish'
-        "\xC4\xC5\xC7\xC9\xD1\xD6\xDC\xE1\xE0\xE2\xE4\xE3\xE5\xE7\xE9\xE8\xEA\xEB\xED\xEC\xEE\xEF\xF1\xF3\xF2\xF4\xF6\xF5\xFA\xF9\xFB\xFC\u2020\xB0\xA2\xA3\xA7\u2022\xB6\xDF\xAE\xA9\u2122\xB4\xA8\u2260\xC6\xD8\u221E\xB1\u2264\u2265\xA5\xB5\u2202\u2211\u220F\u03C0\u222B\xAA\xBA\u03A9\xE6\xF8\xBF\xA1\xAC\u221A\u0192\u2248\u2206\xAB\xBB\u2026\xA0\xC0\xC3\xD5\u0152\u0153\u2013\u2014\u201C\u201D\u2018\u2019\xF7\u25CA\xFF\u0178\u011E\u011F\u0130\u0131\u015E\u015F\u2021\xB7\u201A\u201E\u2030\xC2\xCA\xC1\xCB\xC8\xCD\xCE\xCF\xCC\xD3\xD4\uF8FF\xD2\xDA\xDB\xD9\uF8A0\u02C6\u02DC\xAF\u02D8\u02D9\u02DA\xB8\u02DD\u02DB\u02C7"
-      )
-    };
-    decode.MACSTRING = function(dataView, offset, dataLength, encoding) {
-      var table2 = eightBitMacEncodings[encoding];
-      if (table2 === void 0) {
-        return void 0;
-      }
-      var result = "";
-      for (var i = 0; i < dataLength; i++) {
-        var c = dataView.getUint8(offset + i);
-        if (c <= 127) {
-          result += String.fromCharCode(c);
-        } else {
-          result += table2[c & 127];
-        }
-      }
-      return result;
-    };
-    macEncodingTableCache = typeof WeakMap === "function" && /* @__PURE__ */ new WeakMap();
-    getMacEncodingTable = function(encoding) {
-      if (!macEncodingCacheKeys) {
-        macEncodingCacheKeys = {};
-        for (var e in eightBitMacEncodings) {
-          macEncodingCacheKeys[e] = new String(e);
-        }
-      }
-      var cacheKey = macEncodingCacheKeys[encoding];
-      if (cacheKey === void 0) {
-        return void 0;
-      }
-      if (macEncodingTableCache) {
-        var cachedTable = macEncodingTableCache.get(cacheKey);
-        if (cachedTable !== void 0) {
-          return cachedTable;
-        }
-      }
-      var decodingTable = eightBitMacEncodings[encoding];
-      if (decodingTable === void 0) {
-        return void 0;
-      }
-      var encodingTable = {};
-      for (var i = 0; i < decodingTable.length; i++) {
-        encodingTable[decodingTable.charCodeAt(i)] = i + 128;
-      }
-      if (macEncodingTableCache) {
-        macEncodingTableCache.set(cacheKey, encodingTable);
-      }
-      return encodingTable;
-    };
-    encode.MACSTRING = function(str, encoding) {
-      var table2 = getMacEncodingTable(encoding);
-      if (table2 === void 0) {
-        return void 0;
-      }
-      var result = [];
-      for (var i = 0; i < str.length; i++) {
-        var c = str.charCodeAt(i);
-        if (c >= 128) {
-          c = table2[c];
-          if (c === void 0) {
-            return void 0;
-          }
-        }
-        result[i] = c;
-      }
-      return result;
-    };
-    sizeOf.MACSTRING = function(str, encoding) {
-      var b = encode.MACSTRING(str, encoding);
-      if (b !== void 0) {
-        return b.length;
-      } else {
-        return 0;
-      }
-    };
-    encode.VARDELTAS = function(deltas) {
-      var pos = 0;
-      var result = [];
-      while (pos < deltas.length) {
-        var value = deltas[pos];
-        if (value === 0) {
-          pos = encodeVarDeltaRunAsZeroes(deltas, pos, result);
-        } else if (value >= -128 && value <= 127) {
-          pos = encodeVarDeltaRunAsBytes(deltas, pos, result);
-        } else {
-          pos = encodeVarDeltaRunAsWords(deltas, pos, result);
-        }
-      }
-      return result;
-    };
-    encode.INDEX = function(l) {
-      var offset = 1;
-      var offsets = [offset];
-      var data = [];
-      for (var i = 0; i < l.length; i += 1) {
-        var v = encode.OBJECT(l[i]);
-        Array.prototype.push.apply(data, v);
-        offset += v.length;
-        offsets.push(offset);
-      }
-      if (data.length === 0) {
-        return [0, 0];
-      }
-      var encodedOffsets = [];
-      var offSize = 1 + Math.floor(Math.log(offset) / Math.log(2)) / 8 | 0;
-      var offsetEncoder = [void 0, encode.BYTE, encode.USHORT, encode.UINT24, encode.ULONG][offSize];
-      for (var i$1 = 0; i$1 < offsets.length; i$1 += 1) {
-        var encodedOffset = offsetEncoder(offsets[i$1]);
-        Array.prototype.push.apply(encodedOffsets, encodedOffset);
-      }
-      return Array.prototype.concat(
-        encode.Card16(l.length),
-        encode.OffSize(offSize),
-        encodedOffsets,
-        data
-      );
-    };
-    sizeOf.INDEX = function(v) {
-      return encode.INDEX(v).length;
-    };
-    encode.DICT = function(m) {
-      var d = [];
-      var keys = Object.keys(m);
-      var length = keys.length;
-      for (var i = 0; i < length; i += 1) {
-        var k = parseInt(keys[i], 0);
-        var v = m[k];
-        d = d.concat(encode.OPERAND(v.value, v.type));
-        d = d.concat(encode.OPERATOR(k));
-      }
-      return d;
-    };
-    sizeOf.DICT = function(m) {
-      return encode.DICT(m).length;
-    };
-    encode.OPERATOR = function(v) {
-      if (v < 1200) {
-        return [v];
-      } else {
-        return [12, v - 1200];
-      }
-    };
-    encode.OPERAND = function(v, type) {
-      var d = [];
-      if (Array.isArray(type)) {
-        for (var i = 0; i < type.length; i += 1) {
-          check.argument(v.length === type.length, "Not enough arguments given for type" + type);
-          d = d.concat(encode.OPERAND(v[i], type[i]));
-        }
-      } else {
-        if (type === "SID") {
-          d = d.concat(encode.NUMBER(v));
-        } else if (type === "offset") {
-          d = d.concat(encode.NUMBER32(v));
-        } else if (type === "number") {
-          d = d.concat(encode.NUMBER(v));
-        } else if (type === "real") {
-          d = d.concat(encode.REAL(v));
-        } else {
-          throw new Error("Unknown operand type " + type);
-        }
-      }
-      return d;
-    };
-    encode.OP = encode.BYTE;
-    sizeOf.OP = sizeOf.BYTE;
-    wmm = typeof WeakMap === "function" && /* @__PURE__ */ new WeakMap();
-    encode.CHARSTRING = function(ops) {
-      if (wmm) {
-        var cachedValue = wmm.get(ops);
-        if (cachedValue !== void 0) {
-          return cachedValue;
-        }
-      }
-      var d = [];
-      var length = ops.length;
-      for (var i = 0; i < length; i += 1) {
-        var op = ops[i];
-        d = d.concat(encode[op.type](op.value));
-      }
-      if (wmm) {
-        wmm.set(ops, d);
-      }
-      return d;
-    };
-    sizeOf.CHARSTRING = function(ops) {
-      return encode.CHARSTRING(ops).length;
-    };
-    encode.OBJECT = function(v) {
-      var encodingFunction = encode[v.type];
-      check.argument(encodingFunction !== void 0, "No encoding function for type " + v.type);
-      return encodingFunction(v.value);
-    };
-    sizeOf.OBJECT = function(v) {
-      var sizeOfFunction = sizeOf[v.type];
-      check.argument(sizeOfFunction !== void 0, "No sizeOf function for type " + v.type);
-      return sizeOfFunction(v.value);
-    };
-    encode.TABLE = function(table2) {
-      var d = [];
-      var length = table2.fields.length;
-      var subtables = [];
-      var subtableOffsets = [];
-      for (var i = 0; i < length; i += 1) {
-        var field = table2.fields[i];
-        var encodingFunction = encode[field.type];
-        check.argument(encodingFunction !== void 0, "No encoding function for field type " + field.type + " (" + field.name + ")");
-        var value = table2[field.name];
-        if (value === void 0) {
-          value = field.value;
-        }
-        var bytes = encodingFunction(value);
-        if (field.type === "TABLE") {
-          subtableOffsets.push(d.length);
-          d = d.concat([0, 0]);
-          subtables.push(bytes);
-        } else {
-          d = d.concat(bytes);
-        }
-      }
-      for (var i$1 = 0; i$1 < subtables.length; i$1 += 1) {
-        var o = subtableOffsets[i$1];
-        var offset = d.length;
-        check.argument(offset < 65536, "Table " + table2.tableName + " too big.");
-        d[o] = offset >> 8;
-        d[o + 1] = offset & 255;
-        d = d.concat(subtables[i$1]);
-      }
-      return d;
-    };
-    sizeOf.TABLE = function(table2) {
-      var numBytes = 0;
-      var length = table2.fields.length;
-      for (var i = 0; i < length; i += 1) {
-        var field = table2.fields[i];
-        var sizeOfFunction = sizeOf[field.type];
-        check.argument(sizeOfFunction !== void 0, "No sizeOf function for field type " + field.type + " (" + field.name + ")");
-        var value = table2[field.name];
-        if (value === void 0) {
-          value = field.value;
-        }
-        numBytes += sizeOfFunction(value);
-        if (field.type === "TABLE") {
-          numBytes += 2;
-        }
-      }
-      return numBytes;
-    };
-    encode.RECORD = encode.TABLE;
-    sizeOf.RECORD = sizeOf.TABLE;
-    encode.LITERAL = function(v) {
-      return v;
-    };
-    sizeOf.LITERAL = function(v) {
-      return v.length;
-    };
-    Table.prototype.encode = function() {
-      return encode.TABLE(this);
-    };
-    Table.prototype.sizeOf = function() {
-      return sizeOf.TABLE(this);
-    };
-    Coverage.prototype = Object.create(Table.prototype);
-    Coverage.prototype.constructor = Coverage;
-    ScriptList.prototype = Object.create(Table.prototype);
-    ScriptList.prototype.constructor = ScriptList;
-    FeatureList.prototype = Object.create(Table.prototype);
-    FeatureList.prototype.constructor = FeatureList;
-    LookupList.prototype = Object.create(Table.prototype);
-    LookupList.prototype.constructor = LookupList;
-    table = {
-      Table,
-      Record: Table,
-      Coverage,
-      ScriptList,
-      FeatureList,
-      LookupList,
-      ushortList,
-      tableList,
-      recordList
-    };
-    typeOffsets = {
-      byte: 1,
-      uShort: 2,
-      short: 2,
-      uLong: 4,
-      fixed: 4,
-      longDateTime: 8,
-      tag: 4
-    };
-    Parser.prototype.parseByte = function() {
-      var v = this.data.getUint8(this.offset + this.relativeOffset);
-      this.relativeOffset += 1;
-      return v;
-    };
-    Parser.prototype.parseChar = function() {
-      var v = this.data.getInt8(this.offset + this.relativeOffset);
-      this.relativeOffset += 1;
-      return v;
-    };
-    Parser.prototype.parseCard8 = Parser.prototype.parseByte;
-    Parser.prototype.parseUShort = function() {
-      var v = this.data.getUint16(this.offset + this.relativeOffset);
-      this.relativeOffset += 2;
-      return v;
-    };
-    Parser.prototype.parseCard16 = Parser.prototype.parseUShort;
-    Parser.prototype.parseSID = Parser.prototype.parseUShort;
-    Parser.prototype.parseOffset16 = Parser.prototype.parseUShort;
-    Parser.prototype.parseShort = function() {
-      var v = this.data.getInt16(this.offset + this.relativeOffset);
-      this.relativeOffset += 2;
-      return v;
-    };
-    Parser.prototype.parseF2Dot14 = function() {
-      var v = this.data.getInt16(this.offset + this.relativeOffset) / 16384;
-      this.relativeOffset += 2;
-      return v;
-    };
-    Parser.prototype.parseULong = function() {
-      var v = getULong(this.data, this.offset + this.relativeOffset);
-      this.relativeOffset += 4;
-      return v;
-    };
-    Parser.prototype.parseOffset32 = Parser.prototype.parseULong;
-    Parser.prototype.parseFixed = function() {
-      var v = getFixed(this.data, this.offset + this.relativeOffset);
-      this.relativeOffset += 4;
-      return v;
-    };
-    Parser.prototype.parseString = function(length) {
-      var dataView = this.data;
-      var offset = this.offset + this.relativeOffset;
-      var string = "";
-      this.relativeOffset += length;
-      for (var i = 0; i < length; i++) {
-        string += String.fromCharCode(dataView.getUint8(offset + i));
-      }
-      return string;
-    };
-    Parser.prototype.parseTag = function() {
-      return this.parseString(4);
-    };
-    Parser.prototype.parseLongDateTime = function() {
-      var v = getULong(this.data, this.offset + this.relativeOffset + 4);
-      v -= 2082844800;
-      this.relativeOffset += 8;
-      return v;
-    };
-    Parser.prototype.parseVersion = function(minorBase) {
-      var major = getUShort(this.data, this.offset + this.relativeOffset);
-      var minor = getUShort(this.data, this.offset + this.relativeOffset + 2);
-      this.relativeOffset += 4;
-      if (minorBase === void 0) {
-        minorBase = 4096;
-      }
-      return major + minor / minorBase / 10;
-    };
-    Parser.prototype.skip = function(type, amount) {
-      if (amount === void 0) {
-        amount = 1;
-      }
-      this.relativeOffset += typeOffsets[type] * amount;
-    };
-    Parser.prototype.parseULongList = function(count) {
-      if (count === void 0) {
-        count = this.parseULong();
-      }
-      var offsets = new Array(count);
-      var dataView = this.data;
-      var offset = this.offset + this.relativeOffset;
-      for (var i = 0; i < count; i++) {
-        offsets[i] = dataView.getUint32(offset);
-        offset += 4;
-      }
-      this.relativeOffset += count * 4;
-      return offsets;
-    };
-    Parser.prototype.parseOffset16List = Parser.prototype.parseUShortList = function(count) {
-      if (count === void 0) {
-        count = this.parseUShort();
-      }
-      var offsets = new Array(count);
-      var dataView = this.data;
-      var offset = this.offset + this.relativeOffset;
-      for (var i = 0; i < count; i++) {
-        offsets[i] = dataView.getUint16(offset);
-        offset += 2;
-      }
-      this.relativeOffset += count * 2;
-      return offsets;
-    };
-    Parser.prototype.parseShortList = function(count) {
-      var list = new Array(count);
-      var dataView = this.data;
-      var offset = this.offset + this.relativeOffset;
-      for (var i = 0; i < count; i++) {
-        list[i] = dataView.getInt16(offset);
-        offset += 2;
-      }
-      this.relativeOffset += count * 2;
-      return list;
-    };
-    Parser.prototype.parseByteList = function(count) {
-      var list = new Array(count);
-      var dataView = this.data;
-      var offset = this.offset + this.relativeOffset;
-      for (var i = 0; i < count; i++) {
-        list[i] = dataView.getUint8(offset++);
-      }
-      this.relativeOffset += count;
-      return list;
-    };
-    Parser.prototype.parseList = function(count, itemCallback) {
-      if (!itemCallback) {
-        itemCallback = count;
-        count = this.parseUShort();
-      }
-      var list = new Array(count);
-      for (var i = 0; i < count; i++) {
-        list[i] = itemCallback.call(this);
-      }
-      return list;
-    };
-    Parser.prototype.parseList32 = function(count, itemCallback) {
-      if (!itemCallback) {
-        itemCallback = count;
-        count = this.parseULong();
-      }
-      var list = new Array(count);
-      for (var i = 0; i < count; i++) {
-        list[i] = itemCallback.call(this);
-      }
-      return list;
-    };
-    Parser.prototype.parseRecordList = function(count, recordDescription) {
-      if (!recordDescription) {
-        recordDescription = count;
-        count = this.parseUShort();
-      }
-      var records = new Array(count);
-      var fields = Object.keys(recordDescription);
-      for (var i = 0; i < count; i++) {
-        var rec = {};
-        for (var j = 0; j < fields.length; j++) {
-          var fieldName = fields[j];
-          var fieldType = recordDescription[fieldName];
-          rec[fieldName] = fieldType.call(this);
-        }
-        records[i] = rec;
-      }
-      return records;
-    };
-    Parser.prototype.parseRecordList32 = function(count, recordDescription) {
-      if (!recordDescription) {
-        recordDescription = count;
-        count = this.parseULong();
-      }
-      var records = new Array(count);
-      var fields = Object.keys(recordDescription);
-      for (var i = 0; i < count; i++) {
-        var rec = {};
-        for (var j = 0; j < fields.length; j++) {
-          var fieldName = fields[j];
-          var fieldType = recordDescription[fieldName];
-          rec[fieldName] = fieldType.call(this);
-        }
-        records[i] = rec;
-      }
-      return records;
-    };
-    Parser.prototype.parseStruct = function(description) {
-      if (typeof description === "function") {
-        return description.call(this);
-      } else {
-        var fields = Object.keys(description);
-        var struct = {};
-        for (var j = 0; j < fields.length; j++) {
-          var fieldName = fields[j];
-          var fieldType = description[fieldName];
-          struct[fieldName] = fieldType.call(this);
-        }
-        return struct;
-      }
-    };
-    Parser.prototype.parseValueRecord = function(valueFormat) {
-      if (valueFormat === void 0) {
-        valueFormat = this.parseUShort();
-      }
-      if (valueFormat === 0) {
-        return;
-      }
-      var valueRecord = {};
-      if (valueFormat & 1) {
-        valueRecord.xPlacement = this.parseShort();
-      }
-      if (valueFormat & 2) {
-        valueRecord.yPlacement = this.parseShort();
-      }
-      if (valueFormat & 4) {
-        valueRecord.xAdvance = this.parseShort();
-      }
-      if (valueFormat & 8) {
-        valueRecord.yAdvance = this.parseShort();
-      }
-      if (valueFormat & 16) {
-        valueRecord.xPlaDevice = void 0;
-        this.parseShort();
-      }
-      if (valueFormat & 32) {
-        valueRecord.yPlaDevice = void 0;
-        this.parseShort();
-      }
-      if (valueFormat & 64) {
-        valueRecord.xAdvDevice = void 0;
-        this.parseShort();
-      }
-      if (valueFormat & 128) {
-        valueRecord.yAdvDevice = void 0;
-        this.parseShort();
-      }
-      return valueRecord;
-    };
-    Parser.prototype.parseValueRecordList = function() {
-      var valueFormat = this.parseUShort();
-      var valueCount = this.parseUShort();
-      var values = new Array(valueCount);
-      for (var i = 0; i < valueCount; i++) {
-        values[i] = this.parseValueRecord(valueFormat);
-      }
-      return values;
-    };
-    Parser.prototype.parsePointer = function(description) {
-      var structOffset = this.parseOffset16();
-      if (structOffset > 0) {
-        return new Parser(this.data, this.offset + structOffset).parseStruct(description);
-      }
-      return void 0;
-    };
-    Parser.prototype.parsePointer32 = function(description) {
-      var structOffset = this.parseOffset32();
-      if (structOffset > 0) {
-        return new Parser(this.data, this.offset + structOffset).parseStruct(description);
-      }
-      return void 0;
-    };
-    Parser.prototype.parseListOfLists = function(itemCallback) {
-      var offsets = this.parseOffset16List();
-      var count = offsets.length;
-      var relativeOffset = this.relativeOffset;
-      var list = new Array(count);
-      for (var i = 0; i < count; i++) {
-        var start = offsets[i];
-        if (start === 0) {
-          list[i] = void 0;
-          continue;
-        }
-        this.relativeOffset = start;
-        if (itemCallback) {
-          var subOffsets = this.parseOffset16List();
-          var subList = new Array(subOffsets.length);
-          for (var j = 0; j < subOffsets.length; j++) {
-            this.relativeOffset = start + subOffsets[j];
-            subList[j] = itemCallback.call(this);
-          }
-          list[i] = subList;
-        } else {
-          list[i] = this.parseUShortList();
-        }
-      }
-      this.relativeOffset = relativeOffset;
-      return list;
-    };
-    Parser.prototype.parseCoverage = function() {
-      var startOffset = this.offset + this.relativeOffset;
-      var format = this.parseUShort();
-      var count = this.parseUShort();
-      if (format === 1) {
-        return {
-          format: 1,
-          glyphs: this.parseUShortList(count)
-        };
-      } else if (format === 2) {
-        var ranges = new Array(count);
-        for (var i = 0; i < count; i++) {
-          ranges[i] = {
-            start: this.parseUShort(),
-            end: this.parseUShort(),
-            index: this.parseUShort()
-          };
-        }
-        return {
-          format: 2,
-          ranges
-        };
-      }
-      throw new Error("0x" + startOffset.toString(16) + ": Coverage format must be 1 or 2.");
-    };
-    Parser.prototype.parseClassDef = function() {
-      var startOffset = this.offset + this.relativeOffset;
-      var format = this.parseUShort();
-      if (format === 1) {
-        return {
-          format: 1,
-          startGlyph: this.parseUShort(),
-          classes: this.parseUShortList()
-        };
-      } else if (format === 2) {
-        return {
-          format: 2,
-          ranges: this.parseRecordList({
-            start: Parser.uShort,
-            end: Parser.uShort,
-            classId: Parser.uShort
-          })
-        };
-      }
-      throw new Error("0x" + startOffset.toString(16) + ": ClassDef format must be 1 or 2.");
-    };
-    Parser.list = function(count, itemCallback) {
-      return function() {
-        return this.parseList(count, itemCallback);
-      };
-    };
-    Parser.list32 = function(count, itemCallback) {
-      return function() {
-        return this.parseList32(count, itemCallback);
-      };
-    };
-    Parser.recordList = function(count, recordDescription) {
-      return function() {
-        return this.parseRecordList(count, recordDescription);
-      };
-    };
-    Parser.recordList32 = function(count, recordDescription) {
-      return function() {
-        return this.parseRecordList32(count, recordDescription);
-      };
-    };
-    Parser.pointer = function(description) {
-      return function() {
-        return this.parsePointer(description);
-      };
-    };
-    Parser.pointer32 = function(description) {
-      return function() {
-        return this.parsePointer32(description);
-      };
-    };
-    Parser.tag = Parser.prototype.parseTag;
-    Parser.byte = Parser.prototype.parseByte;
-    Parser.uShort = Parser.offset16 = Parser.prototype.parseUShort;
-    Parser.uShortList = Parser.prototype.parseUShortList;
-    Parser.uLong = Parser.offset32 = Parser.prototype.parseULong;
-    Parser.uLongList = Parser.prototype.parseULongList;
-    Parser.struct = Parser.prototype.parseStruct;
-    Parser.coverage = Parser.prototype.parseCoverage;
-    Parser.classDef = Parser.prototype.parseClassDef;
-    langSysTable = {
-      reserved: Parser.uShort,
-      reqFeatureIndex: Parser.uShort,
-      featureIndexes: Parser.uShortList
-    };
-    Parser.prototype.parseScriptList = function() {
-      return this.parsePointer(Parser.recordList({
-        tag: Parser.tag,
-        script: Parser.pointer({
-          defaultLangSys: Parser.pointer(langSysTable),
-          langSysRecords: Parser.recordList({
-            tag: Parser.tag,
-            langSys: Parser.pointer(langSysTable)
-          })
-        })
-      })) || [];
-    };
-    Parser.prototype.parseFeatureList = function() {
-      return this.parsePointer(Parser.recordList({
-        tag: Parser.tag,
-        feature: Parser.pointer({
-          featureParams: Parser.offset16,
-          lookupListIndexes: Parser.uShortList
-        })
-      })) || [];
-    };
-    Parser.prototype.parseLookupList = function(lookupTableParsers) {
-      return this.parsePointer(Parser.list(Parser.pointer(function() {
-        var lookupType = this.parseUShort();
-        check.argument(1 <= lookupType && lookupType <= 9, "GPOS/GSUB lookup type " + lookupType + " unknown.");
-        var lookupFlag = this.parseUShort();
-        var useMarkFilteringSet = lookupFlag & 16;
-        return {
-          lookupType,
-          lookupFlag,
-          subtables: this.parseList(Parser.pointer(lookupTableParsers[lookupType])),
-          markFilteringSet: useMarkFilteringSet ? this.parseUShort() : void 0
-        };
-      }))) || [];
-    };
-    Parser.prototype.parseFeatureVariationsList = function() {
-      return this.parsePointer32(function() {
-        var majorVersion = this.parseUShort();
-        var minorVersion = this.parseUShort();
-        check.argument(majorVersion === 1 && minorVersion < 1, "GPOS/GSUB feature variations table unknown.");
-        var featureVariations = this.parseRecordList32({
-          conditionSetOffset: Parser.offset32,
-          featureTableSubstitutionOffset: Parser.offset32
-        });
-        return featureVariations;
-      }) || [];
-    };
-    parse = {
-      getByte,
-      getCard8: getByte,
-      getUShort,
-      getCard16: getUShort,
-      getShort,
-      getULong,
-      getFixed,
-      getTag,
-      getOffset,
-      getBytes,
-      bytesToString,
-      Parser
-    };
-    cmap = { parse: parseCmapTable, make: makeCmapTable };
-    cffStandardStrings = [
-      ".notdef",
-      "space",
-      "exclam",
-      "quotedbl",
-      "numbersign",
-      "dollar",
-      "percent",
-      "ampersand",
-      "quoteright",
-      "parenleft",
-      "parenright",
-      "asterisk",
-      "plus",
-      "comma",
-      "hyphen",
-      "period",
-      "slash",
-      "zero",
-      "one",
-      "two",
-      "three",
-      "four",
-      "five",
-      "six",
-      "seven",
-      "eight",
-      "nine",
-      "colon",
-      "semicolon",
-      "less",
-      "equal",
-      "greater",
-      "question",
-      "at",
-      "A",
-      "B",
-      "C",
-      "D",
-      "E",
-      "F",
-      "G",
-      "H",
-      "I",
-      "J",
-      "K",
-      "L",
-      "M",
-      "N",
-      "O",
-      "P",
-      "Q",
-      "R",
-      "S",
-      "T",
-      "U",
-      "V",
-      "W",
-      "X",
-      "Y",
-      "Z",
-      "bracketleft",
-      "backslash",
-      "bracketright",
-      "asciicircum",
-      "underscore",
-      "quoteleft",
-      "a",
-      "b",
-      "c",
-      "d",
-      "e",
-      "f",
-      "g",
-      "h",
-      "i",
-      "j",
-      "k",
-      "l",
-      "m",
-      "n",
-      "o",
-      "p",
-      "q",
-      "r",
-      "s",
-      "t",
-      "u",
-      "v",
-      "w",
-      "x",
-      "y",
-      "z",
-      "braceleft",
-      "bar",
-      "braceright",
-      "asciitilde",
-      "exclamdown",
-      "cent",
-      "sterling",
-      "fraction",
-      "yen",
-      "florin",
-      "section",
-      "currency",
-      "quotesingle",
-      "quotedblleft",
-      "guillemotleft",
-      "guilsinglleft",
-      "guilsinglright",
-      "fi",
-      "fl",
-      "endash",
-      "dagger",
-      "daggerdbl",
-      "periodcentered",
-      "paragraph",
-      "bullet",
-      "quotesinglbase",
-      "quotedblbase",
-      "quotedblright",
-      "guillemotright",
-      "ellipsis",
-      "perthousand",
-      "questiondown",
-      "grave",
-      "acute",
-      "circumflex",
-      "tilde",
-      "macron",
-      "breve",
-      "dotaccent",
-      "dieresis",
-      "ring",
-      "cedilla",
-      "hungarumlaut",
-      "ogonek",
-      "caron",
-      "emdash",
-      "AE",
-      "ordfeminine",
-      "Lslash",
-      "Oslash",
-      "OE",
-      "ordmasculine",
-      "ae",
-      "dotlessi",
-      "lslash",
-      "oslash",
-      "oe",
-      "germandbls",
-      "onesuperior",
-      "logicalnot",
-      "mu",
-      "trademark",
-      "Eth",
-      "onehalf",
-      "plusminus",
-      "Thorn",
-      "onequarter",
-      "divide",
-      "brokenbar",
-      "degree",
-      "thorn",
-      "threequarters",
-      "twosuperior",
-      "registered",
-      "minus",
-      "eth",
-      "multiply",
-      "threesuperior",
-      "copyright",
-      "Aacute",
-      "Acircumflex",
-      "Adieresis",
-      "Agrave",
-      "Aring",
-      "Atilde",
-      "Ccedilla",
-      "Eacute",
-      "Ecircumflex",
-      "Edieresis",
-      "Egrave",
-      "Iacute",
-      "Icircumflex",
-      "Idieresis",
-      "Igrave",
-      "Ntilde",
-      "Oacute",
-      "Ocircumflex",
-      "Odieresis",
-      "Ograve",
-      "Otilde",
-      "Scaron",
-      "Uacute",
-      "Ucircumflex",
-      "Udieresis",
-      "Ugrave",
-      "Yacute",
-      "Ydieresis",
-      "Zcaron",
-      "aacute",
-      "acircumflex",
-      "adieresis",
-      "agrave",
-      "aring",
-      "atilde",
-      "ccedilla",
-      "eacute",
-      "ecircumflex",
-      "edieresis",
-      "egrave",
-      "iacute",
-      "icircumflex",
-      "idieresis",
-      "igrave",
-      "ntilde",
-      "oacute",
-      "ocircumflex",
-      "odieresis",
-      "ograve",
-      "otilde",
-      "scaron",
-      "uacute",
-      "ucircumflex",
-      "udieresis",
-      "ugrave",
-      "yacute",
-      "ydieresis",
-      "zcaron",
-      "exclamsmall",
-      "Hungarumlautsmall",
-      "dollaroldstyle",
-      "dollarsuperior",
-      "ampersandsmall",
-      "Acutesmall",
-      "parenleftsuperior",
-      "parenrightsuperior",
-      "266 ff",
-      "onedotenleader",
-      "zerooldstyle",
-      "oneoldstyle",
-      "twooldstyle",
-      "threeoldstyle",
-      "fouroldstyle",
-      "fiveoldstyle",
-      "sixoldstyle",
-      "sevenoldstyle",
-      "eightoldstyle",
-      "nineoldstyle",
-      "commasuperior",
-      "threequartersemdash",
-      "periodsuperior",
-      "questionsmall",
-      "asuperior",
-      "bsuperior",
-      "centsuperior",
-      "dsuperior",
-      "esuperior",
-      "isuperior",
-      "lsuperior",
-      "msuperior",
-      "nsuperior",
-      "osuperior",
-      "rsuperior",
-      "ssuperior",
-      "tsuperior",
-      "ff",
-      "ffi",
-      "ffl",
-      "parenleftinferior",
-      "parenrightinferior",
-      "Circumflexsmall",
-      "hyphensuperior",
-      "Gravesmall",
-      "Asmall",
-      "Bsmall",
-      "Csmall",
-      "Dsmall",
-      "Esmall",
-      "Fsmall",
-      "Gsmall",
-      "Hsmall",
-      "Ismall",
-      "Jsmall",
-      "Ksmall",
-      "Lsmall",
-      "Msmall",
-      "Nsmall",
-      "Osmall",
-      "Psmall",
-      "Qsmall",
-      "Rsmall",
-      "Ssmall",
-      "Tsmall",
-      "Usmall",
-      "Vsmall",
-      "Wsmall",
-      "Xsmall",
-      "Ysmall",
-      "Zsmall",
-      "colonmonetary",
-      "onefitted",
-      "rupiah",
-      "Tildesmall",
-      "exclamdownsmall",
-      "centoldstyle",
-      "Lslashsmall",
-      "Scaronsmall",
-      "Zcaronsmall",
-      "Dieresissmall",
-      "Brevesmall",
-      "Caronsmall",
-      "Dotaccentsmall",
-      "Macronsmall",
-      "figuredash",
-      "hypheninferior",
-      "Ogoneksmall",
-      "Ringsmall",
-      "Cedillasmall",
-      "questiondownsmall",
-      "oneeighth",
-      "threeeighths",
-      "fiveeighths",
-      "seveneighths",
-      "onethird",
-      "twothirds",
-      "zerosuperior",
-      "foursuperior",
-      "fivesuperior",
-      "sixsuperior",
-      "sevensuperior",
-      "eightsuperior",
-      "ninesuperior",
-      "zeroinferior",
-      "oneinferior",
-      "twoinferior",
-      "threeinferior",
-      "fourinferior",
-      "fiveinferior",
-      "sixinferior",
-      "seveninferior",
-      "eightinferior",
-      "nineinferior",
-      "centinferior",
-      "dollarinferior",
-      "periodinferior",
-      "commainferior",
-      "Agravesmall",
-      "Aacutesmall",
-      "Acircumflexsmall",
-      "Atildesmall",
-      "Adieresissmall",
-      "Aringsmall",
-      "AEsmall",
-      "Ccedillasmall",
-      "Egravesmall",
-      "Eacutesmall",
-      "Ecircumflexsmall",
-      "Edieresissmall",
-      "Igravesmall",
-      "Iacutesmall",
-      "Icircumflexsmall",
-      "Idieresissmall",
-      "Ethsmall",
-      "Ntildesmall",
-      "Ogravesmall",
-      "Oacutesmall",
-      "Ocircumflexsmall",
-      "Otildesmall",
-      "Odieresissmall",
-      "OEsmall",
-      "Oslashsmall",
-      "Ugravesmall",
-      "Uacutesmall",
-      "Ucircumflexsmall",
-      "Udieresissmall",
-      "Yacutesmall",
-      "Thornsmall",
-      "Ydieresissmall",
-      "001.000",
-      "001.001",
-      "001.002",
-      "001.003",
-      "Black",
-      "Bold",
-      "Book",
-      "Light",
-      "Medium",
-      "Regular",
-      "Roman",
-      "Semibold"
-    ];
-    cffStandardEncoding = [
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "space",
-      "exclam",
-      "quotedbl",
-      "numbersign",
-      "dollar",
-      "percent",
-      "ampersand",
-      "quoteright",
-      "parenleft",
-      "parenright",
-      "asterisk",
-      "plus",
-      "comma",
-      "hyphen",
-      "period",
-      "slash",
-      "zero",
-      "one",
-      "two",
-      "three",
-      "four",
-      "five",
-      "six",
-      "seven",
-      "eight",
-      "nine",
-      "colon",
-      "semicolon",
-      "less",
-      "equal",
-      "greater",
-      "question",
-      "at",
-      "A",
-      "B",
-      "C",
-      "D",
-      "E",
-      "F",
-      "G",
-      "H",
-      "I",
-      "J",
-      "K",
-      "L",
-      "M",
-      "N",
-      "O",
-      "P",
-      "Q",
-      "R",
-      "S",
-      "T",
-      "U",
-      "V",
-      "W",
-      "X",
-      "Y",
-      "Z",
-      "bracketleft",
-      "backslash",
-      "bracketright",
-      "asciicircum",
-      "underscore",
-      "quoteleft",
-      "a",
-      "b",
-      "c",
-      "d",
-      "e",
-      "f",
-      "g",
-      "h",
-      "i",
-      "j",
-      "k",
-      "l",
-      "m",
-      "n",
-      "o",
-      "p",
-      "q",
-      "r",
-      "s",
-      "t",
-      "u",
-      "v",
-      "w",
-      "x",
-      "y",
-      "z",
-      "braceleft",
-      "bar",
-      "braceright",
-      "asciitilde",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "exclamdown",
-      "cent",
-      "sterling",
-      "fraction",
-      "yen",
-      "florin",
-      "section",
-      "currency",
-      "quotesingle",
-      "quotedblleft",
-      "guillemotleft",
-      "guilsinglleft",
-      "guilsinglright",
-      "fi",
-      "fl",
-      "",
-      "endash",
-      "dagger",
-      "daggerdbl",
-      "periodcentered",
-      "",
-      "paragraph",
-      "bullet",
-      "quotesinglbase",
-      "quotedblbase",
-      "quotedblright",
-      "guillemotright",
-      "ellipsis",
-      "perthousand",
-      "",
-      "questiondown",
-      "",
-      "grave",
-      "acute",
-      "circumflex",
-      "tilde",
-      "macron",
-      "breve",
-      "dotaccent",
-      "dieresis",
-      "",
-      "ring",
-      "cedilla",
-      "",
-      "hungarumlaut",
-      "ogonek",
-      "caron",
-      "emdash",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "AE",
-      "",
-      "ordfeminine",
-      "",
-      "",
-      "",
-      "",
-      "Lslash",
-      "Oslash",
-      "OE",
-      "ordmasculine",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "ae",
-      "",
-      "",
-      "",
-      "dotlessi",
-      "",
-      "",
-      "lslash",
-      "oslash",
-      "oe",
-      "germandbls"
-    ];
-    cffExpertEncoding = [
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "space",
-      "exclamsmall",
-      "Hungarumlautsmall",
-      "",
-      "dollaroldstyle",
-      "dollarsuperior",
-      "ampersandsmall",
-      "Acutesmall",
-      "parenleftsuperior",
-      "parenrightsuperior",
-      "twodotenleader",
-      "onedotenleader",
-      "comma",
-      "hyphen",
-      "period",
-      "fraction",
-      "zerooldstyle",
-      "oneoldstyle",
-      "twooldstyle",
-      "threeoldstyle",
-      "fouroldstyle",
-      "fiveoldstyle",
-      "sixoldstyle",
-      "sevenoldstyle",
-      "eightoldstyle",
-      "nineoldstyle",
-      "colon",
-      "semicolon",
-      "commasuperior",
-      "threequartersemdash",
-      "periodsuperior",
-      "questionsmall",
-      "",
-      "asuperior",
-      "bsuperior",
-      "centsuperior",
-      "dsuperior",
-      "esuperior",
-      "",
-      "",
-      "isuperior",
-      "",
-      "",
-      "lsuperior",
-      "msuperior",
-      "nsuperior",
-      "osuperior",
-      "",
-      "",
-      "rsuperior",
-      "ssuperior",
-      "tsuperior",
-      "",
-      "ff",
-      "fi",
-      "fl",
-      "ffi",
-      "ffl",
-      "parenleftinferior",
-      "",
-      "parenrightinferior",
-      "Circumflexsmall",
-      "hyphensuperior",
-      "Gravesmall",
-      "Asmall",
-      "Bsmall",
-      "Csmall",
-      "Dsmall",
-      "Esmall",
-      "Fsmall",
-      "Gsmall",
-      "Hsmall",
-      "Ismall",
-      "Jsmall",
-      "Ksmall",
-      "Lsmall",
-      "Msmall",
-      "Nsmall",
-      "Osmall",
-      "Psmall",
-      "Qsmall",
-      "Rsmall",
-      "Ssmall",
-      "Tsmall",
-      "Usmall",
-      "Vsmall",
-      "Wsmall",
-      "Xsmall",
-      "Ysmall",
-      "Zsmall",
-      "colonmonetary",
-      "onefitted",
-      "rupiah",
-      "Tildesmall",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "exclamdownsmall",
-      "centoldstyle",
-      "Lslashsmall",
-      "",
-      "",
-      "Scaronsmall",
-      "Zcaronsmall",
-      "Dieresissmall",
-      "Brevesmall",
-      "Caronsmall",
-      "",
-      "Dotaccentsmall",
-      "",
-      "",
-      "Macronsmall",
-      "",
-      "",
-      "figuredash",
-      "hypheninferior",
-      "",
-      "",
-      "Ogoneksmall",
-      "Ringsmall",
-      "Cedillasmall",
-      "",
-      "",
-      "",
-      "onequarter",
-      "onehalf",
-      "threequarters",
-      "questiondownsmall",
-      "oneeighth",
-      "threeeighths",
-      "fiveeighths",
-      "seveneighths",
-      "onethird",
-      "twothirds",
-      "",
-      "",
-      "zerosuperior",
-      "onesuperior",
-      "twosuperior",
-      "threesuperior",
-      "foursuperior",
-      "fivesuperior",
-      "sixsuperior",
-      "sevensuperior",
-      "eightsuperior",
-      "ninesuperior",
-      "zeroinferior",
-      "oneinferior",
-      "twoinferior",
-      "threeinferior",
-      "fourinferior",
-      "fiveinferior",
-      "sixinferior",
-      "seveninferior",
-      "eightinferior",
-      "nineinferior",
-      "centinferior",
-      "dollarinferior",
-      "periodinferior",
-      "commainferior",
-      "Agravesmall",
-      "Aacutesmall",
-      "Acircumflexsmall",
-      "Atildesmall",
-      "Adieresissmall",
-      "Aringsmall",
-      "AEsmall",
-      "Ccedillasmall",
-      "Egravesmall",
-      "Eacutesmall",
-      "Ecircumflexsmall",
-      "Edieresissmall",
-      "Igravesmall",
-      "Iacutesmall",
-      "Icircumflexsmall",
-      "Idieresissmall",
-      "Ethsmall",
-      "Ntildesmall",
-      "Ogravesmall",
-      "Oacutesmall",
-      "Ocircumflexsmall",
-      "Otildesmall",
-      "Odieresissmall",
-      "OEsmall",
-      "Oslashsmall",
-      "Ugravesmall",
-      "Uacutesmall",
-      "Ucircumflexsmall",
-      "Udieresissmall",
-      "Yacutesmall",
-      "Thornsmall",
-      "Ydieresissmall"
-    ];
-    standardNames = [
-      ".notdef",
-      ".null",
-      "nonmarkingreturn",
-      "space",
-      "exclam",
-      "quotedbl",
-      "numbersign",
-      "dollar",
-      "percent",
-      "ampersand",
-      "quotesingle",
-      "parenleft",
-      "parenright",
-      "asterisk",
-      "plus",
-      "comma",
-      "hyphen",
-      "period",
-      "slash",
-      "zero",
-      "one",
-      "two",
-      "three",
-      "four",
-      "five",
-      "six",
-      "seven",
-      "eight",
-      "nine",
-      "colon",
-      "semicolon",
-      "less",
-      "equal",
-      "greater",
-      "question",
-      "at",
-      "A",
-      "B",
-      "C",
-      "D",
-      "E",
-      "F",
-      "G",
-      "H",
-      "I",
-      "J",
-      "K",
-      "L",
-      "M",
-      "N",
-      "O",
-      "P",
-      "Q",
-      "R",
-      "S",
-      "T",
-      "U",
-      "V",
-      "W",
-      "X",
-      "Y",
-      "Z",
-      "bracketleft",
-      "backslash",
-      "bracketright",
-      "asciicircum",
-      "underscore",
-      "grave",
-      "a",
-      "b",
-      "c",
-      "d",
-      "e",
-      "f",
-      "g",
-      "h",
-      "i",
-      "j",
-      "k",
-      "l",
-      "m",
-      "n",
-      "o",
-      "p",
-      "q",
-      "r",
-      "s",
-      "t",
-      "u",
-      "v",
-      "w",
-      "x",
-      "y",
-      "z",
-      "braceleft",
-      "bar",
-      "braceright",
-      "asciitilde",
-      "Adieresis",
-      "Aring",
-      "Ccedilla",
-      "Eacute",
-      "Ntilde",
-      "Odieresis",
-      "Udieresis",
-      "aacute",
-      "agrave",
-      "acircumflex",
-      "adieresis",
-      "atilde",
-      "aring",
-      "ccedilla",
-      "eacute",
-      "egrave",
-      "ecircumflex",
-      "edieresis",
-      "iacute",
-      "igrave",
-      "icircumflex",
-      "idieresis",
-      "ntilde",
-      "oacute",
-      "ograve",
-      "ocircumflex",
-      "odieresis",
-      "otilde",
-      "uacute",
-      "ugrave",
-      "ucircumflex",
-      "udieresis",
-      "dagger",
-      "degree",
-      "cent",
-      "sterling",
-      "section",
-      "bullet",
-      "paragraph",
-      "germandbls",
-      "registered",
-      "copyright",
-      "trademark",
-      "acute",
-      "dieresis",
-      "notequal",
-      "AE",
-      "Oslash",
-      "infinity",
-      "plusminus",
-      "lessequal",
-      "greaterequal",
-      "yen",
-      "mu",
-      "partialdiff",
-      "summation",
-      "product",
-      "pi",
-      "integral",
-      "ordfeminine",
-      "ordmasculine",
-      "Omega",
-      "ae",
-      "oslash",
-      "questiondown",
-      "exclamdown",
-      "logicalnot",
-      "radical",
-      "florin",
-      "approxequal",
-      "Delta",
-      "guillemotleft",
-      "guillemotright",
-      "ellipsis",
-      "nonbreakingspace",
-      "Agrave",
-      "Atilde",
-      "Otilde",
-      "OE",
-      "oe",
-      "endash",
-      "emdash",
-      "quotedblleft",
-      "quotedblright",
-      "quoteleft",
-      "quoteright",
-      "divide",
-      "lozenge",
-      "ydieresis",
-      "Ydieresis",
-      "fraction",
-      "currency",
-      "guilsinglleft",
-      "guilsinglright",
-      "fi",
-      "fl",
-      "daggerdbl",
-      "periodcentered",
-      "quotesinglbase",
-      "quotedblbase",
-      "perthousand",
-      "Acircumflex",
-      "Ecircumflex",
-      "Aacute",
-      "Edieresis",
-      "Egrave",
-      "Iacute",
-      "Icircumflex",
-      "Idieresis",
-      "Igrave",
-      "Oacute",
-      "Ocircumflex",
-      "apple",
-      "Ograve",
-      "Uacute",
-      "Ucircumflex",
-      "Ugrave",
-      "dotlessi",
-      "circumflex",
-      "tilde",
-      "macron",
-      "breve",
-      "dotaccent",
-      "ring",
-      "cedilla",
-      "hungarumlaut",
-      "ogonek",
-      "caron",
-      "Lslash",
-      "lslash",
-      "Scaron",
-      "scaron",
-      "Zcaron",
-      "zcaron",
-      "brokenbar",
-      "Eth",
-      "eth",
-      "Yacute",
-      "yacute",
-      "Thorn",
-      "thorn",
-      "minus",
-      "multiply",
-      "onesuperior",
-      "twosuperior",
-      "threesuperior",
-      "onehalf",
-      "onequarter",
-      "threequarters",
-      "franc",
-      "Gbreve",
-      "gbreve",
-      "Idotaccent",
-      "Scedilla",
-      "scedilla",
-      "Cacute",
-      "cacute",
-      "Ccaron",
-      "ccaron",
-      "dcroat"
-    ];
-    DefaultEncoding.prototype.charToGlyphIndex = function(c) {
-      var code = c.codePointAt(0);
-      var glyphs = this.font.glyphs;
-      if (glyphs) {
-        for (var i = 0; i < glyphs.length; i += 1) {
-          var glyph = glyphs.get(i);
-          for (var j = 0; j < glyph.unicodes.length; j += 1) {
-            if (glyph.unicodes[j] === code) {
-              return i;
-            }
-          }
-        }
-      }
-      return null;
-    };
-    CmapEncoding.prototype.charToGlyphIndex = function(c) {
-      return this.cmap.glyphIndexMap[c.codePointAt(0)] || 0;
-    };
-    CffEncoding.prototype.charToGlyphIndex = function(s) {
-      var code = s.codePointAt(0);
-      var charName = this.encoding[code];
-      return this.charset.indexOf(charName);
-    };
-    GlyphNames.prototype.nameToGlyphIndex = function(name) {
-      return this.names.indexOf(name);
-    };
-    GlyphNames.prototype.glyphIndexToName = function(gid) {
-      return this.names[gid];
-    };
-    draw = { line };
-    Glyph.prototype.bindConstructorValues = function(options) {
-      this.index = options.index || 0;
-      this.name = options.name || null;
-      this.unicode = options.unicode || void 0;
-      this.unicodes = options.unicodes || options.unicode !== void 0 ? [options.unicode] : [];
-      if ("xMin" in options) {
-        this.xMin = options.xMin;
-      }
-      if ("yMin" in options) {
-        this.yMin = options.yMin;
-      }
-      if ("xMax" in options) {
-        this.xMax = options.xMax;
-      }
-      if ("yMax" in options) {
-        this.yMax = options.yMax;
-      }
-      if ("advanceWidth" in options) {
-        this.advanceWidth = options.advanceWidth;
-      }
-      Object.defineProperty(this, "path", getPathDefinition(this, options.path));
-    };
-    Glyph.prototype.addUnicode = function(unicode) {
-      if (this.unicodes.length === 0) {
-        this.unicode = unicode;
-      }
-      this.unicodes.push(unicode);
-    };
-    Glyph.prototype.getBoundingBox = function() {
-      return this.path.getBoundingBox();
-    };
-    Glyph.prototype.getPath = function(x, y, fontSize, options, font) {
-      x = x !== void 0 ? x : 0;
-      y = y !== void 0 ? y : 0;
-      fontSize = fontSize !== void 0 ? fontSize : 72;
-      var commands;
-      var hPoints;
-      if (!options) {
-        options = {};
-      }
-      var xScale = options.xScale;
-      var yScale = options.yScale;
-      if (options.hinting && font && font.hinting) {
-        hPoints = this.path && font.hinting.exec(this, fontSize);
-      }
-      if (hPoints) {
-        commands = font.hinting.getCommands(hPoints);
-        x = Math.round(x);
-        y = Math.round(y);
-        xScale = yScale = 1;
-      } else {
-        commands = this.path.commands;
-        var scale = 1 / (this.path.unitsPerEm || 1e3) * fontSize;
-        if (xScale === void 0) {
-          xScale = scale;
-        }
-        if (yScale === void 0) {
-          yScale = scale;
-        }
-      }
-      var p = new Path();
-      for (var i = 0; i < commands.length; i += 1) {
-        var cmd = commands[i];
-        if (cmd.type === "M") {
-          p.moveTo(x + cmd.x * xScale, y + -cmd.y * yScale);
-        } else if (cmd.type === "L") {
-          p.lineTo(x + cmd.x * xScale, y + -cmd.y * yScale);
-        } else if (cmd.type === "Q") {
-          p.quadraticCurveTo(
-            x + cmd.x1 * xScale,
-            y + -cmd.y1 * yScale,
-            x + cmd.x * xScale,
-            y + -cmd.y * yScale
-          );
-        } else if (cmd.type === "C") {
-          p.curveTo(
-            x + cmd.x1 * xScale,
-            y + -cmd.y1 * yScale,
-            x + cmd.x2 * xScale,
-            y + -cmd.y2 * yScale,
-            x + cmd.x * xScale,
-            y + -cmd.y * yScale
-          );
-        } else if (cmd.type === "Z") {
-          p.closePath();
-        }
-      }
-      return p;
-    };
-    Glyph.prototype.getContours = function() {
-      if (this.points === void 0) {
-        return [];
-      }
-      var contours = [];
-      var currentContour = [];
-      for (var i = 0; i < this.points.length; i += 1) {
-        var pt = this.points[i];
-        currentContour.push(pt);
-        if (pt.lastPointOfContour) {
-          contours.push(currentContour);
-          currentContour = [];
-        }
-      }
-      check.argument(currentContour.length === 0, "There are still points left in the current contour.");
-      return contours;
-    };
-    Glyph.prototype.getMetrics = function() {
-      var commands = this.path.commands;
-      var xCoords = [];
-      var yCoords = [];
-      for (var i = 0; i < commands.length; i += 1) {
-        var cmd = commands[i];
-        if (cmd.type !== "Z") {
-          xCoords.push(cmd.x);
-          yCoords.push(cmd.y);
-        }
-        if (cmd.type === "Q" || cmd.type === "C") {
-          xCoords.push(cmd.x1);
-          yCoords.push(cmd.y1);
-        }
-        if (cmd.type === "C") {
-          xCoords.push(cmd.x2);
-          yCoords.push(cmd.y2);
-        }
-      }
-      var metrics = {
-        xMin: Math.min.apply(null, xCoords),
-        yMin: Math.min.apply(null, yCoords),
-        xMax: Math.max.apply(null, xCoords),
-        yMax: Math.max.apply(null, yCoords),
-        leftSideBearing: this.leftSideBearing
-      };
-      if (!isFinite(metrics.xMin)) {
-        metrics.xMin = 0;
-      }
-      if (!isFinite(metrics.xMax)) {
-        metrics.xMax = this.advanceWidth;
-      }
-      if (!isFinite(metrics.yMin)) {
-        metrics.yMin = 0;
-      }
-      if (!isFinite(metrics.yMax)) {
-        metrics.yMax = 0;
-      }
-      metrics.rightSideBearing = this.advanceWidth - metrics.leftSideBearing - (metrics.xMax - metrics.xMin);
-      return metrics;
-    };
-    Glyph.prototype.draw = function(ctx, x, y, fontSize, options) {
-      this.getPath(x, y, fontSize, options).draw(ctx);
-    };
-    Glyph.prototype.drawPoints = function(ctx, x, y, fontSize) {
-      function drawCircles(l, x2, y2, scale2) {
-        ctx.beginPath();
-        for (var j = 0; j < l.length; j += 1) {
-          ctx.moveTo(x2 + l[j].x * scale2, y2 + l[j].y * scale2);
-          ctx.arc(x2 + l[j].x * scale2, y2 + l[j].y * scale2, 2, 0, Math.PI * 2, false);
-        }
-        ctx.closePath();
-        ctx.fill();
-      }
-      x = x !== void 0 ? x : 0;
-      y = y !== void 0 ? y : 0;
-      fontSize = fontSize !== void 0 ? fontSize : 24;
-      var scale = 1 / this.path.unitsPerEm * fontSize;
-      var blueCircles = [];
-      var redCircles = [];
-      var path = this.path;
-      for (var i = 0; i < path.commands.length; i += 1) {
-        var cmd = path.commands[i];
-        if (cmd.x !== void 0) {
-          blueCircles.push({ x: cmd.x, y: -cmd.y });
-        }
-        if (cmd.x1 !== void 0) {
-          redCircles.push({ x: cmd.x1, y: -cmd.y1 });
-        }
-        if (cmd.x2 !== void 0) {
-          redCircles.push({ x: cmd.x2, y: -cmd.y2 });
-        }
-      }
-      ctx.fillStyle = "blue";
-      drawCircles(blueCircles, x, y, scale);
-      ctx.fillStyle = "red";
-      drawCircles(redCircles, x, y, scale);
-    };
-    Glyph.prototype.drawMetrics = function(ctx, x, y, fontSize) {
-      var scale;
-      x = x !== void 0 ? x : 0;
-      y = y !== void 0 ? y : 0;
-      fontSize = fontSize !== void 0 ? fontSize : 24;
-      scale = 1 / this.path.unitsPerEm * fontSize;
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = "black";
-      draw.line(ctx, x, -1e4, x, 1e4);
-      draw.line(ctx, -1e4, y, 1e4, y);
-      var xMin = this.xMin || 0;
-      var yMin = this.yMin || 0;
-      var xMax = this.xMax || 0;
-      var yMax = this.yMax || 0;
-      var advanceWidth = this.advanceWidth || 0;
-      ctx.strokeStyle = "blue";
-      draw.line(ctx, x + xMin * scale, -1e4, x + xMin * scale, 1e4);
-      draw.line(ctx, x + xMax * scale, -1e4, x + xMax * scale, 1e4);
-      draw.line(ctx, -1e4, y + -yMin * scale, 1e4, y + -yMin * scale);
-      draw.line(ctx, -1e4, y + -yMax * scale, 1e4, y + -yMax * scale);
-      ctx.strokeStyle = "green";
-      draw.line(ctx, x + advanceWidth * scale, -1e4, x + advanceWidth * scale, 1e4);
-    };
-    GlyphSet.prototype.get = function(index) {
-      if (this.glyphs[index] === void 0) {
-        this.font._push(index);
-        if (typeof this.glyphs[index] === "function") {
-          this.glyphs[index] = this.glyphs[index]();
-        }
-        var glyph = this.glyphs[index];
-        var unicodeObj = this.font._IndexToUnicodeMap[index];
-        if (unicodeObj) {
-          for (var j = 0; j < unicodeObj.unicodes.length; j++) {
-            glyph.addUnicode(unicodeObj.unicodes[j]);
-          }
-        }
-        if (this.font.cffEncoding) {
-          if (this.font.isCIDFont) {
-            glyph.name = "gid" + index;
-          } else {
-            glyph.name = this.font.cffEncoding.charset[index];
-          }
-        } else if (this.font.glyphNames.names) {
-          glyph.name = this.font.glyphNames.glyphIndexToName(index);
-        }
-        this.glyphs[index].advanceWidth = this.font._hmtxTableData[index].advanceWidth;
-        this.glyphs[index].leftSideBearing = this.font._hmtxTableData[index].leftSideBearing;
-      } else {
-        if (typeof this.glyphs[index] === "function") {
-          this.glyphs[index] = this.glyphs[index]();
-        }
-      }
-      return this.glyphs[index];
-    };
-    GlyphSet.prototype.push = function(index, loader) {
-      this.glyphs[index] = loader;
-      this.length++;
-    };
-    glyphset = { GlyphSet, glyphLoader, ttfGlyphLoader, cffGlyphLoader };
-    TOP_DICT_META = [
-      { name: "version", op: 0, type: "SID" },
-      { name: "notice", op: 1, type: "SID" },
-      { name: "copyright", op: 1200, type: "SID" },
-      { name: "fullName", op: 2, type: "SID" },
-      { name: "familyName", op: 3, type: "SID" },
-      { name: "weight", op: 4, type: "SID" },
-      { name: "isFixedPitch", op: 1201, type: "number", value: 0 },
-      { name: "italicAngle", op: 1202, type: "number", value: 0 },
-      { name: "underlinePosition", op: 1203, type: "number", value: -100 },
-      { name: "underlineThickness", op: 1204, type: "number", value: 50 },
-      { name: "paintType", op: 1205, type: "number", value: 0 },
-      { name: "charstringType", op: 1206, type: "number", value: 2 },
-      {
-        name: "fontMatrix",
-        op: 1207,
-        type: ["real", "real", "real", "real", "real", "real"],
-        value: [1e-3, 0, 0, 1e-3, 0, 0]
-      },
-      { name: "uniqueId", op: 13, type: "number" },
-      { name: "fontBBox", op: 5, type: ["number", "number", "number", "number"], value: [0, 0, 0, 0] },
-      { name: "strokeWidth", op: 1208, type: "number", value: 0 },
-      { name: "xuid", op: 14, type: [], value: null },
-      { name: "charset", op: 15, type: "offset", value: 0 },
-      { name: "encoding", op: 16, type: "offset", value: 0 },
-      { name: "charStrings", op: 17, type: "offset", value: 0 },
-      { name: "private", op: 18, type: ["number", "offset"], value: [0, 0] },
-      { name: "ros", op: 1230, type: ["SID", "SID", "number"] },
-      { name: "cidFontVersion", op: 1231, type: "number", value: 0 },
-      { name: "cidFontRevision", op: 1232, type: "number", value: 0 },
-      { name: "cidFontType", op: 1233, type: "number", value: 0 },
-      { name: "cidCount", op: 1234, type: "number", value: 8720 },
-      { name: "uidBase", op: 1235, type: "number" },
-      { name: "fdArray", op: 1236, type: "offset" },
-      { name: "fdSelect", op: 1237, type: "offset" },
-      { name: "fontName", op: 1238, type: "SID" }
-    ];
-    PRIVATE_DICT_META = [
-      { name: "subrs", op: 19, type: "offset", value: 0 },
-      { name: "defaultWidthX", op: 20, type: "number", value: 0 },
-      { name: "nominalWidthX", op: 21, type: "number", value: 0 }
-    ];
-    cff = { parse: parseCFFTable, make: makeCFFTable };
-    head = { parse: parseHeadTable, make: makeHeadTable };
-    hhea = { parse: parseHheaTable, make: makeHheaTable };
-    hmtx = { parse: parseHmtxTable, make: makeHmtxTable };
-    ltag = { make: makeLtagTable, parse: parseLtagTable };
-    maxp = { parse: parseMaxpTable, make: makeMaxpTable };
-    nameTableNames = [
-      "copyright",
-      // 0
-      "fontFamily",
-      // 1
-      "fontSubfamily",
-      // 2
-      "uniqueID",
-      // 3
-      "fullName",
-      // 4
-      "version",
-      // 5
-      "postScriptName",
-      // 6
-      "trademark",
-      // 7
-      "manufacturer",
-      // 8
-      "designer",
-      // 9
-      "description",
-      // 10
-      "manufacturerURL",
-      // 11
-      "designerURL",
-      // 12
-      "license",
-      // 13
-      "licenseURL",
-      // 14
-      "reserved",
-      // 15
-      "preferredFamily",
-      // 16
-      "preferredSubfamily",
-      // 17
-      "compatibleFullName",
-      // 18
-      "sampleText",
-      // 19
-      "postScriptFindFontName",
-      // 20
-      "wwsFamily",
-      // 21
-      "wwsSubfamily"
-      // 22
-    ];
-    macLanguages = {
-      0: "en",
-      1: "fr",
-      2: "de",
-      3: "it",
-      4: "nl",
-      5: "sv",
-      6: "es",
-      7: "da",
-      8: "pt",
-      9: "no",
-      10: "he",
-      11: "ja",
-      12: "ar",
-      13: "fi",
-      14: "el",
-      15: "is",
-      16: "mt",
-      17: "tr",
-      18: "hr",
-      19: "zh-Hant",
-      20: "ur",
-      21: "hi",
-      22: "th",
-      23: "ko",
-      24: "lt",
-      25: "pl",
-      26: "hu",
-      27: "es",
-      28: "lv",
-      29: "se",
-      30: "fo",
-      31: "fa",
-      32: "ru",
-      33: "zh",
-      34: "nl-BE",
-      35: "ga",
-      36: "sq",
-      37: "ro",
-      38: "cz",
-      39: "sk",
-      40: "si",
-      41: "yi",
-      42: "sr",
-      43: "mk",
-      44: "bg",
-      45: "uk",
-      46: "be",
-      47: "uz",
-      48: "kk",
-      49: "az-Cyrl",
-      50: "az-Arab",
-      51: "hy",
-      52: "ka",
-      53: "mo",
-      54: "ky",
-      55: "tg",
-      56: "tk",
-      57: "mn-CN",
-      58: "mn",
-      59: "ps",
-      60: "ks",
-      61: "ku",
-      62: "sd",
-      63: "bo",
-      64: "ne",
-      65: "sa",
-      66: "mr",
-      67: "bn",
-      68: "as",
-      69: "gu",
-      70: "pa",
-      71: "or",
-      72: "ml",
-      73: "kn",
-      74: "ta",
-      75: "te",
-      76: "si",
-      77: "my",
-      78: "km",
-      79: "lo",
-      80: "vi",
-      81: "id",
-      82: "tl",
-      83: "ms",
-      84: "ms-Arab",
-      85: "am",
-      86: "ti",
-      87: "om",
-      88: "so",
-      89: "sw",
-      90: "rw",
-      91: "rn",
-      92: "ny",
-      93: "mg",
-      94: "eo",
-      128: "cy",
-      129: "eu",
-      130: "ca",
-      131: "la",
-      132: "qu",
-      133: "gn",
-      134: "ay",
-      135: "tt",
-      136: "ug",
-      137: "dz",
-      138: "jv",
-      139: "su",
-      140: "gl",
-      141: "af",
-      142: "br",
-      143: "iu",
-      144: "gd",
-      145: "gv",
-      146: "ga",
-      147: "to",
-      148: "el-polyton",
-      149: "kl",
-      150: "az",
-      151: "nn"
-    };
-    macLanguageToScript = {
-      0: 0,
-      // langEnglish → smRoman
-      1: 0,
-      // langFrench → smRoman
-      2: 0,
-      // langGerman → smRoman
-      3: 0,
-      // langItalian → smRoman
-      4: 0,
-      // langDutch → smRoman
-      5: 0,
-      // langSwedish → smRoman
-      6: 0,
-      // langSpanish → smRoman
-      7: 0,
-      // langDanish → smRoman
-      8: 0,
-      // langPortuguese → smRoman
-      9: 0,
-      // langNorwegian → smRoman
-      10: 5,
-      // langHebrew → smHebrew
-      11: 1,
-      // langJapanese → smJapanese
-      12: 4,
-      // langArabic → smArabic
-      13: 0,
-      // langFinnish → smRoman
-      14: 6,
-      // langGreek → smGreek
-      15: 0,
-      // langIcelandic → smRoman (modified)
-      16: 0,
-      // langMaltese → smRoman
-      17: 0,
-      // langTurkish → smRoman (modified)
-      18: 0,
-      // langCroatian → smRoman (modified)
-      19: 2,
-      // langTradChinese → smTradChinese
-      20: 4,
-      // langUrdu → smArabic
-      21: 9,
-      // langHindi → smDevanagari
-      22: 21,
-      // langThai → smThai
-      23: 3,
-      // langKorean → smKorean
-      24: 29,
-      // langLithuanian → smCentralEuroRoman
-      25: 29,
-      // langPolish → smCentralEuroRoman
-      26: 29,
-      // langHungarian → smCentralEuroRoman
-      27: 29,
-      // langEstonian → smCentralEuroRoman
-      28: 29,
-      // langLatvian → smCentralEuroRoman
-      29: 0,
-      // langSami → smRoman
-      30: 0,
-      // langFaroese → smRoman (modified)
-      31: 4,
-      // langFarsi → smArabic (modified)
-      32: 7,
-      // langRussian → smCyrillic
-      33: 25,
-      // langSimpChinese → smSimpChinese
-      34: 0,
-      // langFlemish → smRoman
-      35: 0,
-      // langIrishGaelic → smRoman (modified)
-      36: 0,
-      // langAlbanian → smRoman
-      37: 0,
-      // langRomanian → smRoman (modified)
-      38: 29,
-      // langCzech → smCentralEuroRoman
-      39: 29,
-      // langSlovak → smCentralEuroRoman
-      40: 0,
-      // langSlovenian → smRoman (modified)
-      41: 5,
-      // langYiddish → smHebrew
-      42: 7,
-      // langSerbian → smCyrillic
-      43: 7,
-      // langMacedonian → smCyrillic
-      44: 7,
-      // langBulgarian → smCyrillic
-      45: 7,
-      // langUkrainian → smCyrillic (modified)
-      46: 7,
-      // langByelorussian → smCyrillic
-      47: 7,
-      // langUzbek → smCyrillic
-      48: 7,
-      // langKazakh → smCyrillic
-      49: 7,
-      // langAzerbaijani → smCyrillic
-      50: 4,
-      // langAzerbaijanAr → smArabic
-      51: 24,
-      // langArmenian → smArmenian
-      52: 23,
-      // langGeorgian → smGeorgian
-      53: 7,
-      // langMoldavian → smCyrillic
-      54: 7,
-      // langKirghiz → smCyrillic
-      55: 7,
-      // langTajiki → smCyrillic
-      56: 7,
-      // langTurkmen → smCyrillic
-      57: 27,
-      // langMongolian → smMongolian
-      58: 7,
-      // langMongolianCyr → smCyrillic
-      59: 4,
-      // langPashto → smArabic
-      60: 4,
-      // langKurdish → smArabic
-      61: 4,
-      // langKashmiri → smArabic
-      62: 4,
-      // langSindhi → smArabic
-      63: 26,
-      // langTibetan → smTibetan
-      64: 9,
-      // langNepali → smDevanagari
-      65: 9,
-      // langSanskrit → smDevanagari
-      66: 9,
-      // langMarathi → smDevanagari
-      67: 13,
-      // langBengali → smBengali
-      68: 13,
-      // langAssamese → smBengali
-      69: 11,
-      // langGujarati → smGujarati
-      70: 10,
-      // langPunjabi → smGurmukhi
-      71: 12,
-      // langOriya → smOriya
-      72: 17,
-      // langMalayalam → smMalayalam
-      73: 16,
-      // langKannada → smKannada
-      74: 14,
-      // langTamil → smTamil
-      75: 15,
-      // langTelugu → smTelugu
-      76: 18,
-      // langSinhalese → smSinhalese
-      77: 19,
-      // langBurmese → smBurmese
-      78: 20,
-      // langKhmer → smKhmer
-      79: 22,
-      // langLao → smLao
-      80: 30,
-      // langVietnamese → smVietnamese
-      81: 0,
-      // langIndonesian → smRoman
-      82: 0,
-      // langTagalog → smRoman
-      83: 0,
-      // langMalayRoman → smRoman
-      84: 4,
-      // langMalayArabic → smArabic
-      85: 28,
-      // langAmharic → smEthiopic
-      86: 28,
-      // langTigrinya → smEthiopic
-      87: 28,
-      // langOromo → smEthiopic
-      88: 0,
-      // langSomali → smRoman
-      89: 0,
-      // langSwahili → smRoman
-      90: 0,
-      // langKinyarwanda → smRoman
-      91: 0,
-      // langRundi → smRoman
-      92: 0,
-      // langNyanja → smRoman
-      93: 0,
-      // langMalagasy → smRoman
-      94: 0,
-      // langEsperanto → smRoman
-      128: 0,
-      // langWelsh → smRoman (modified)
-      129: 0,
-      // langBasque → smRoman
-      130: 0,
-      // langCatalan → smRoman
-      131: 0,
-      // langLatin → smRoman
-      132: 0,
-      // langQuechua → smRoman
-      133: 0,
-      // langGuarani → smRoman
-      134: 0,
-      // langAymara → smRoman
-      135: 7,
-      // langTatar → smCyrillic
-      136: 4,
-      // langUighur → smArabic
-      137: 26,
-      // langDzongkha → smTibetan
-      138: 0,
-      // langJavaneseRom → smRoman
-      139: 0,
-      // langSundaneseRom → smRoman
-      140: 0,
-      // langGalician → smRoman
-      141: 0,
-      // langAfrikaans → smRoman
-      142: 0,
-      // langBreton → smRoman (modified)
-      143: 28,
-      // langInuktitut → smEthiopic (modified)
-      144: 0,
-      // langScottishGaelic → smRoman (modified)
-      145: 0,
-      // langManxGaelic → smRoman (modified)
-      146: 0,
-      // langIrishGaelicScript → smRoman (modified)
-      147: 0,
-      // langTongan → smRoman
-      148: 6,
-      // langGreekAncient → smRoman
-      149: 0,
-      // langGreenlandic → smRoman
-      150: 0,
-      // langAzerbaijanRoman → smRoman
-      151: 0
-      // langNynorsk → smRoman
-    };
-    windowsLanguages = {
-      1078: "af",
-      1052: "sq",
-      1156: "gsw",
-      1118: "am",
-      5121: "ar-DZ",
-      15361: "ar-BH",
-      3073: "ar",
-      2049: "ar-IQ",
-      11265: "ar-JO",
-      13313: "ar-KW",
-      12289: "ar-LB",
-      4097: "ar-LY",
-      6145: "ary",
-      8193: "ar-OM",
-      16385: "ar-QA",
-      1025: "ar-SA",
-      10241: "ar-SY",
-      7169: "aeb",
-      14337: "ar-AE",
-      9217: "ar-YE",
-      1067: "hy",
-      1101: "as",
-      2092: "az-Cyrl",
-      1068: "az",
-      1133: "ba",
-      1069: "eu",
-      1059: "be",
-      2117: "bn",
-      1093: "bn-IN",
-      8218: "bs-Cyrl",
-      5146: "bs",
-      1150: "br",
-      1026: "bg",
-      1027: "ca",
-      3076: "zh-HK",
-      5124: "zh-MO",
-      2052: "zh",
-      4100: "zh-SG",
-      1028: "zh-TW",
-      1155: "co",
-      1050: "hr",
-      4122: "hr-BA",
-      1029: "cs",
-      1030: "da",
-      1164: "prs",
-      1125: "dv",
-      2067: "nl-BE",
-      1043: "nl",
-      3081: "en-AU",
-      10249: "en-BZ",
-      4105: "en-CA",
-      9225: "en-029",
-      16393: "en-IN",
-      6153: "en-IE",
-      8201: "en-JM",
-      17417: "en-MY",
-      5129: "en-NZ",
-      13321: "en-PH",
-      18441: "en-SG",
-      7177: "en-ZA",
-      11273: "en-TT",
-      2057: "en-GB",
-      1033: "en",
-      12297: "en-ZW",
-      1061: "et",
-      1080: "fo",
-      1124: "fil",
-      1035: "fi",
-      2060: "fr-BE",
-      3084: "fr-CA",
-      1036: "fr",
-      5132: "fr-LU",
-      6156: "fr-MC",
-      4108: "fr-CH",
-      1122: "fy",
-      1110: "gl",
-      1079: "ka",
-      3079: "de-AT",
-      1031: "de",
-      5127: "de-LI",
-      4103: "de-LU",
-      2055: "de-CH",
-      1032: "el",
-      1135: "kl",
-      1095: "gu",
-      1128: "ha",
-      1037: "he",
-      1081: "hi",
-      1038: "hu",
-      1039: "is",
-      1136: "ig",
-      1057: "id",
-      1117: "iu",
-      2141: "iu-Latn",
-      2108: "ga",
-      1076: "xh",
-      1077: "zu",
-      1040: "it",
-      2064: "it-CH",
-      1041: "ja",
-      1099: "kn",
-      1087: "kk",
-      1107: "km",
-      1158: "quc",
-      1159: "rw",
-      1089: "sw",
-      1111: "kok",
-      1042: "ko",
-      1088: "ky",
-      1108: "lo",
-      1062: "lv",
-      1063: "lt",
-      2094: "dsb",
-      1134: "lb",
-      1071: "mk",
-      2110: "ms-BN",
-      1086: "ms",
-      1100: "ml",
-      1082: "mt",
-      1153: "mi",
-      1146: "arn",
-      1102: "mr",
-      1148: "moh",
-      1104: "mn",
-      2128: "mn-CN",
-      1121: "ne",
-      1044: "nb",
-      2068: "nn",
-      1154: "oc",
-      1096: "or",
-      1123: "ps",
-      1045: "pl",
-      1046: "pt",
-      2070: "pt-PT",
-      1094: "pa",
-      1131: "qu-BO",
-      2155: "qu-EC",
-      3179: "qu",
-      1048: "ro",
-      1047: "rm",
-      1049: "ru",
-      9275: "smn",
-      4155: "smj-NO",
-      5179: "smj",
-      3131: "se-FI",
-      1083: "se",
-      2107: "se-SE",
-      8251: "sms",
-      6203: "sma-NO",
-      7227: "sms",
-      1103: "sa",
-      7194: "sr-Cyrl-BA",
-      3098: "sr",
-      6170: "sr-Latn-BA",
-      2074: "sr-Latn",
-      1132: "nso",
-      1074: "tn",
-      1115: "si",
-      1051: "sk",
-      1060: "sl",
-      11274: "es-AR",
-      16394: "es-BO",
-      13322: "es-CL",
-      9226: "es-CO",
-      5130: "es-CR",
-      7178: "es-DO",
-      12298: "es-EC",
-      17418: "es-SV",
-      4106: "es-GT",
-      18442: "es-HN",
-      2058: "es-MX",
-      19466: "es-NI",
-      6154: "es-PA",
-      15370: "es-PY",
-      10250: "es-PE",
-      20490: "es-PR",
-      // Microsoft has defined two different language codes for
-      // “Spanish with modern sorting” and “Spanish with traditional
-      // sorting”. This makes sense for collation APIs, and it would be
-      // possible to express this in BCP 47 language tags via Unicode
-      // extensions (eg., es-u-co-trad is Spanish with traditional
-      // sorting). However, for storing names in fonts, the distinction
-      // does not make sense, so we give “es” in both cases.
-      3082: "es",
-      1034: "es",
-      21514: "es-US",
-      14346: "es-UY",
-      8202: "es-VE",
-      2077: "sv-FI",
-      1053: "sv",
-      1114: "syr",
-      1064: "tg",
-      2143: "tzm",
-      1097: "ta",
-      1092: "tt",
-      1098: "te",
-      1054: "th",
-      1105: "bo",
-      1055: "tr",
-      1090: "tk",
-      1152: "ug",
-      1058: "uk",
-      1070: "hsb",
-      1056: "ur",
-      2115: "uz-Cyrl",
-      1091: "uz",
-      1066: "vi",
-      1106: "cy",
-      1160: "wo",
-      1157: "sah",
-      1144: "ii",
-      1130: "yo"
-    };
-    utf16 = "utf-16";
-    macScriptEncodings = {
-      0: "macintosh",
-      // smRoman
-      1: "x-mac-japanese",
-      // smJapanese
-      2: "x-mac-chinesetrad",
-      // smTradChinese
-      3: "x-mac-korean",
-      // smKorean
-      6: "x-mac-greek",
-      // smGreek
-      7: "x-mac-cyrillic",
-      // smCyrillic
-      9: "x-mac-devanagai",
-      // smDevanagari
-      10: "x-mac-gurmukhi",
-      // smGurmukhi
-      11: "x-mac-gujarati",
-      // smGujarati
-      12: "x-mac-oriya",
-      // smOriya
-      13: "x-mac-bengali",
-      // smBengali
-      14: "x-mac-tamil",
-      // smTamil
-      15: "x-mac-telugu",
-      // smTelugu
-      16: "x-mac-kannada",
-      // smKannada
-      17: "x-mac-malayalam",
-      // smMalayalam
-      18: "x-mac-sinhalese",
-      // smSinhalese
-      19: "x-mac-burmese",
-      // smBurmese
-      20: "x-mac-khmer",
-      // smKhmer
-      21: "x-mac-thai",
-      // smThai
-      22: "x-mac-lao",
-      // smLao
-      23: "x-mac-georgian",
-      // smGeorgian
-      24: "x-mac-armenian",
-      // smArmenian
-      25: "x-mac-chinesesimp",
-      // smSimpChinese
-      26: "x-mac-tibetan",
-      // smTibetan
-      27: "x-mac-mongolian",
-      // smMongolian
-      28: "x-mac-ethiopic",
-      // smEthiopic
-      29: "x-mac-ce",
-      // smCentralEuroRoman
-      30: "x-mac-vietnamese",
-      // smVietnamese
-      31: "x-mac-extarabic"
-      // smExtArabic
-    };
-    macLanguageEncodings = {
-      15: "x-mac-icelandic",
-      // langIcelandic
-      17: "x-mac-turkish",
-      // langTurkish
-      18: "x-mac-croatian",
-      // langCroatian
-      24: "x-mac-ce",
-      // langLithuanian
-      25: "x-mac-ce",
-      // langPolish
-      26: "x-mac-ce",
-      // langHungarian
-      27: "x-mac-ce",
-      // langEstonian
-      28: "x-mac-ce",
-      // langLatvian
-      30: "x-mac-icelandic",
-      // langFaroese
-      37: "x-mac-romanian",
-      // langRomanian
-      38: "x-mac-ce",
-      // langCzech
-      39: "x-mac-ce",
-      // langSlovak
-      40: "x-mac-ce",
-      // langSlovenian
-      143: "x-mac-inuit",
-      // langInuktitut
-      146: "x-mac-gaelic"
-      // langIrishGaelicScript
-    };
-    _name = { parse: parseNameTable, make: makeNameTable };
-    unicodeRanges = [
-      { begin: 0, end: 127 },
-      // Basic Latin
-      { begin: 128, end: 255 },
-      // Latin-1 Supplement
-      { begin: 256, end: 383 },
-      // Latin Extended-A
-      { begin: 384, end: 591 },
-      // Latin Extended-B
-      { begin: 592, end: 687 },
-      // IPA Extensions
-      { begin: 688, end: 767 },
-      // Spacing Modifier Letters
-      { begin: 768, end: 879 },
-      // Combining Diacritical Marks
-      { begin: 880, end: 1023 },
-      // Greek and Coptic
-      { begin: 11392, end: 11519 },
-      // Coptic
-      { begin: 1024, end: 1279 },
-      // Cyrillic
-      { begin: 1328, end: 1423 },
-      // Armenian
-      { begin: 1424, end: 1535 },
-      // Hebrew
-      { begin: 42240, end: 42559 },
-      // Vai
-      { begin: 1536, end: 1791 },
-      // Arabic
-      { begin: 1984, end: 2047 },
-      // NKo
-      { begin: 2304, end: 2431 },
-      // Devanagari
-      { begin: 2432, end: 2559 },
-      // Bengali
-      { begin: 2560, end: 2687 },
-      // Gurmukhi
-      { begin: 2688, end: 2815 },
-      // Gujarati
-      { begin: 2816, end: 2943 },
-      // Oriya
-      { begin: 2944, end: 3071 },
-      // Tamil
-      { begin: 3072, end: 3199 },
-      // Telugu
-      { begin: 3200, end: 3327 },
-      // Kannada
-      { begin: 3328, end: 3455 },
-      // Malayalam
-      { begin: 3584, end: 3711 },
-      // Thai
-      { begin: 3712, end: 3839 },
-      // Lao
-      { begin: 4256, end: 4351 },
-      // Georgian
-      { begin: 6912, end: 7039 },
-      // Balinese
-      { begin: 4352, end: 4607 },
-      // Hangul Jamo
-      { begin: 7680, end: 7935 },
-      // Latin Extended Additional
-      { begin: 7936, end: 8191 },
-      // Greek Extended
-      { begin: 8192, end: 8303 },
-      // General Punctuation
-      { begin: 8304, end: 8351 },
-      // Superscripts And Subscripts
-      { begin: 8352, end: 8399 },
-      // Currency Symbol
-      { begin: 8400, end: 8447 },
-      // Combining Diacritical Marks For Symbols
-      { begin: 8448, end: 8527 },
-      // Letterlike Symbols
-      { begin: 8528, end: 8591 },
-      // Number Forms
-      { begin: 8592, end: 8703 },
-      // Arrows
-      { begin: 8704, end: 8959 },
-      // Mathematical Operators
-      { begin: 8960, end: 9215 },
-      // Miscellaneous Technical
-      { begin: 9216, end: 9279 },
-      // Control Pictures
-      { begin: 9280, end: 9311 },
-      // Optical Character Recognition
-      { begin: 9312, end: 9471 },
-      // Enclosed Alphanumerics
-      { begin: 9472, end: 9599 },
-      // Box Drawing
-      { begin: 9600, end: 9631 },
-      // Block Elements
-      { begin: 9632, end: 9727 },
-      // Geometric Shapes
-      { begin: 9728, end: 9983 },
-      // Miscellaneous Symbols
-      { begin: 9984, end: 10175 },
-      // Dingbats
-      { begin: 12288, end: 12351 },
-      // CJK Symbols And Punctuation
-      { begin: 12352, end: 12447 },
-      // Hiragana
-      { begin: 12448, end: 12543 },
-      // Katakana
-      { begin: 12544, end: 12591 },
-      // Bopomofo
-      { begin: 12592, end: 12687 },
-      // Hangul Compatibility Jamo
-      { begin: 43072, end: 43135 },
-      // Phags-pa
-      { begin: 12800, end: 13055 },
-      // Enclosed CJK Letters And Months
-      { begin: 13056, end: 13311 },
-      // CJK Compatibility
-      { begin: 44032, end: 55215 },
-      // Hangul Syllables
-      { begin: 55296, end: 57343 },
-      // Non-Plane 0 *
-      { begin: 67840, end: 67871 },
-      // Phoenicia
-      { begin: 19968, end: 40959 },
-      // CJK Unified Ideographs
-      { begin: 57344, end: 63743 },
-      // Private Use Area (plane 0)
-      { begin: 12736, end: 12783 },
-      // CJK Strokes
-      { begin: 64256, end: 64335 },
-      // Alphabetic Presentation Forms
-      { begin: 64336, end: 65023 },
-      // Arabic Presentation Forms-A
-      { begin: 65056, end: 65071 },
-      // Combining Half Marks
-      { begin: 65040, end: 65055 },
-      // Vertical Forms
-      { begin: 65104, end: 65135 },
-      // Small Form Variants
-      { begin: 65136, end: 65279 },
-      // Arabic Presentation Forms-B
-      { begin: 65280, end: 65519 },
-      // Halfwidth And Fullwidth Forms
-      { begin: 65520, end: 65535 },
-      // Specials
-      { begin: 3840, end: 4095 },
-      // Tibetan
-      { begin: 1792, end: 1871 },
-      // Syriac
-      { begin: 1920, end: 1983 },
-      // Thaana
-      { begin: 3456, end: 3583 },
-      // Sinhala
-      { begin: 4096, end: 4255 },
-      // Myanmar
-      { begin: 4608, end: 4991 },
-      // Ethiopic
-      { begin: 5024, end: 5119 },
-      // Cherokee
-      { begin: 5120, end: 5759 },
-      // Unified Canadian Aboriginal Syllabics
-      { begin: 5760, end: 5791 },
-      // Ogham
-      { begin: 5792, end: 5887 },
-      // Runic
-      { begin: 6016, end: 6143 },
-      // Khmer
-      { begin: 6144, end: 6319 },
-      // Mongolian
-      { begin: 10240, end: 10495 },
-      // Braille Patterns
-      { begin: 40960, end: 42127 },
-      // Yi Syllables
-      { begin: 5888, end: 5919 },
-      // Tagalog
-      { begin: 66304, end: 66351 },
-      // Old Italic
-      { begin: 66352, end: 66383 },
-      // Gothic
-      { begin: 66560, end: 66639 },
-      // Deseret
-      { begin: 118784, end: 119039 },
-      // Byzantine Musical Symbols
-      { begin: 119808, end: 120831 },
-      // Mathematical Alphanumeric Symbols
-      { begin: 1044480, end: 1048573 },
-      // Private Use (plane 15)
-      { begin: 65024, end: 65039 },
-      // Variation Selectors
-      { begin: 917504, end: 917631 },
-      // Tags
-      { begin: 6400, end: 6479 },
-      // Limbu
-      { begin: 6480, end: 6527 },
-      // Tai Le
-      { begin: 6528, end: 6623 },
-      // New Tai Lue
-      { begin: 6656, end: 6687 },
-      // Buginese
-      { begin: 11264, end: 11359 },
-      // Glagolitic
-      { begin: 11568, end: 11647 },
-      // Tifinagh
-      { begin: 19904, end: 19967 },
-      // Yijing Hexagram Symbols
-      { begin: 43008, end: 43055 },
-      // Syloti Nagri
-      { begin: 65536, end: 65663 },
-      // Linear B Syllabary
-      { begin: 65856, end: 65935 },
-      // Ancient Greek Numbers
-      { begin: 66432, end: 66463 },
-      // Ugaritic
-      { begin: 66464, end: 66527 },
-      // Old Persian
-      { begin: 66640, end: 66687 },
-      // Shavian
-      { begin: 66688, end: 66735 },
-      // Osmanya
-      { begin: 67584, end: 67647 },
-      // Cypriot Syllabary
-      { begin: 68096, end: 68191 },
-      // Kharoshthi
-      { begin: 119552, end: 119647 },
-      // Tai Xuan Jing Symbols
-      { begin: 73728, end: 74751 },
-      // Cuneiform
-      { begin: 119648, end: 119679 },
-      // Counting Rod Numerals
-      { begin: 7040, end: 7103 },
-      // Sundanese
-      { begin: 7168, end: 7247 },
-      // Lepcha
-      { begin: 7248, end: 7295 },
-      // Ol Chiki
-      { begin: 43136, end: 43231 },
-      // Saurashtra
-      { begin: 43264, end: 43311 },
-      // Kayah Li
-      { begin: 43312, end: 43359 },
-      // Rejang
-      { begin: 43520, end: 43615 },
-      // Cham
-      { begin: 65936, end: 65999 },
-      // Ancient Symbols
-      { begin: 66e3, end: 66047 },
-      // Phaistos Disc
-      { begin: 66208, end: 66271 },
-      // Carian
-      { begin: 127024, end: 127135 }
-      // Domino Tiles
-    ];
-    os2 = { parse: parseOS2Table, make: makeOS2Table, unicodeRanges, getUnicodeRange };
-    post = { parse: parsePostTable, make: makePostTable };
-    subtableParsers = new Array(9);
-    subtableParsers[1] = function parseLookup1() {
-      var start = this.offset + this.relativeOffset;
-      var substFormat = this.parseUShort();
-      if (substFormat === 1) {
-        return {
-          substFormat: 1,
-          coverage: this.parsePointer(Parser.coverage),
-          deltaGlyphId: this.parseUShort()
-        };
-      } else if (substFormat === 2) {
-        return {
-          substFormat: 2,
-          coverage: this.parsePointer(Parser.coverage),
-          substitute: this.parseOffset16List()
-        };
-      }
-      check.assert(false, "0x" + start.toString(16) + ": lookup type 1 format must be 1 or 2.");
-    };
-    subtableParsers[2] = function parseLookup2() {
-      var substFormat = this.parseUShort();
-      check.argument(substFormat === 1, "GSUB Multiple Substitution Subtable identifier-format must be 1");
-      return {
-        substFormat,
-        coverage: this.parsePointer(Parser.coverage),
-        sequences: this.parseListOfLists()
-      };
-    };
-    subtableParsers[3] = function parseLookup3() {
-      var substFormat = this.parseUShort();
-      check.argument(substFormat === 1, "GSUB Alternate Substitution Subtable identifier-format must be 1");
-      return {
-        substFormat,
-        coverage: this.parsePointer(Parser.coverage),
-        alternateSets: this.parseListOfLists()
-      };
-    };
-    subtableParsers[4] = function parseLookup4() {
-      var substFormat = this.parseUShort();
-      check.argument(substFormat === 1, "GSUB ligature table identifier-format must be 1");
-      return {
-        substFormat,
-        coverage: this.parsePointer(Parser.coverage),
-        ligatureSets: this.parseListOfLists(function() {
-          return {
-            ligGlyph: this.parseUShort(),
-            components: this.parseUShortList(this.parseUShort() - 1)
-          };
-        })
-      };
-    };
-    lookupRecordDesc = {
-      sequenceIndex: Parser.uShort,
-      lookupListIndex: Parser.uShort
-    };
-    subtableParsers[5] = function parseLookup5() {
-      var start = this.offset + this.relativeOffset;
-      var substFormat = this.parseUShort();
-      if (substFormat === 1) {
-        return {
-          substFormat,
-          coverage: this.parsePointer(Parser.coverage),
-          ruleSets: this.parseListOfLists(function() {
-            var glyphCount2 = this.parseUShort();
-            var substCount2 = this.parseUShort();
-            return {
-              input: this.parseUShortList(glyphCount2 - 1),
-              lookupRecords: this.parseRecordList(substCount2, lookupRecordDesc)
-            };
-          })
-        };
-      } else if (substFormat === 2) {
-        return {
-          substFormat,
-          coverage: this.parsePointer(Parser.coverage),
-          classDef: this.parsePointer(Parser.classDef),
-          classSets: this.parseListOfLists(function() {
-            var glyphCount2 = this.parseUShort();
-            var substCount2 = this.parseUShort();
-            return {
-              classes: this.parseUShortList(glyphCount2 - 1),
-              lookupRecords: this.parseRecordList(substCount2, lookupRecordDesc)
-            };
-          })
-        };
-      } else if (substFormat === 3) {
-        var glyphCount = this.parseUShort();
-        var substCount = this.parseUShort();
-        return {
-          substFormat,
-          coverages: this.parseList(glyphCount, Parser.pointer(Parser.coverage)),
-          lookupRecords: this.parseRecordList(substCount, lookupRecordDesc)
-        };
-      }
-      check.assert(false, "0x" + start.toString(16) + ": lookup type 5 format must be 1, 2 or 3.");
-    };
-    subtableParsers[6] = function parseLookup6() {
-      var start = this.offset + this.relativeOffset;
-      var substFormat = this.parseUShort();
-      if (substFormat === 1) {
-        return {
-          substFormat: 1,
-          coverage: this.parsePointer(Parser.coverage),
-          chainRuleSets: this.parseListOfLists(function() {
-            return {
-              backtrack: this.parseUShortList(),
-              input: this.parseUShortList(this.parseShort() - 1),
-              lookahead: this.parseUShortList(),
-              lookupRecords: this.parseRecordList(lookupRecordDesc)
-            };
-          })
-        };
-      } else if (substFormat === 2) {
-        return {
-          substFormat: 2,
-          coverage: this.parsePointer(Parser.coverage),
-          backtrackClassDef: this.parsePointer(Parser.classDef),
-          inputClassDef: this.parsePointer(Parser.classDef),
-          lookaheadClassDef: this.parsePointer(Parser.classDef),
-          chainClassSet: this.parseListOfLists(function() {
-            return {
-              backtrack: this.parseUShortList(),
-              input: this.parseUShortList(this.parseShort() - 1),
-              lookahead: this.parseUShortList(),
-              lookupRecords: this.parseRecordList(lookupRecordDesc)
-            };
-          })
-        };
-      } else if (substFormat === 3) {
-        return {
-          substFormat: 3,
-          backtrackCoverage: this.parseList(Parser.pointer(Parser.coverage)),
-          inputCoverage: this.parseList(Parser.pointer(Parser.coverage)),
-          lookaheadCoverage: this.parseList(Parser.pointer(Parser.coverage)),
-          lookupRecords: this.parseRecordList(lookupRecordDesc)
-        };
-      }
-      check.assert(false, "0x" + start.toString(16) + ": lookup type 6 format must be 1, 2 or 3.");
-    };
-    subtableParsers[7] = function parseLookup7() {
-      var substFormat = this.parseUShort();
-      check.argument(substFormat === 1, "GSUB Extension Substitution subtable identifier-format must be 1");
-      var extensionLookupType = this.parseUShort();
-      var extensionParser = new Parser(this.data, this.offset + this.parseULong());
-      return {
-        substFormat: 1,
-        lookupType: extensionLookupType,
-        extension: subtableParsers[extensionLookupType].call(extensionParser)
-      };
-    };
-    subtableParsers[8] = function parseLookup8() {
-      var substFormat = this.parseUShort();
-      check.argument(substFormat === 1, "GSUB Reverse Chaining Contextual Single Substitution Subtable identifier-format must be 1");
-      return {
-        substFormat,
-        coverage: this.parsePointer(Parser.coverage),
-        backtrackCoverage: this.parseList(Parser.pointer(Parser.coverage)),
-        lookaheadCoverage: this.parseList(Parser.pointer(Parser.coverage)),
-        substitutes: this.parseUShortList()
-      };
-    };
-    subtableMakers = new Array(9);
-    subtableMakers[1] = function makeLookup1(subtable) {
-      if (subtable.substFormat === 1) {
-        return new table.Table("substitutionTable", [
-          { name: "substFormat", type: "USHORT", value: 1 },
-          { name: "coverage", type: "TABLE", value: new table.Coverage(subtable.coverage) },
-          { name: "deltaGlyphID", type: "USHORT", value: subtable.deltaGlyphId }
-        ]);
-      } else {
-        return new table.Table("substitutionTable", [
-          { name: "substFormat", type: "USHORT", value: 2 },
-          { name: "coverage", type: "TABLE", value: new table.Coverage(subtable.coverage) }
-        ].concat(table.ushortList("substitute", subtable.substitute)));
-      }
-    };
-    subtableMakers[2] = function makeLookup2(subtable) {
-      check.assert(subtable.substFormat === 1, "Lookup type 2 substFormat must be 1.");
-      return new table.Table("substitutionTable", [
-        { name: "substFormat", type: "USHORT", value: 1 },
-        { name: "coverage", type: "TABLE", value: new table.Coverage(subtable.coverage) }
-      ].concat(table.tableList("seqSet", subtable.sequences, function(sequenceSet) {
-        return new table.Table("sequenceSetTable", table.ushortList("sequence", sequenceSet));
-      })));
-    };
-    subtableMakers[3] = function makeLookup3(subtable) {
-      check.assert(subtable.substFormat === 1, "Lookup type 3 substFormat must be 1.");
-      return new table.Table("substitutionTable", [
-        { name: "substFormat", type: "USHORT", value: 1 },
-        { name: "coverage", type: "TABLE", value: new table.Coverage(subtable.coverage) }
-      ].concat(table.tableList("altSet", subtable.alternateSets, function(alternateSet) {
-        return new table.Table("alternateSetTable", table.ushortList("alternate", alternateSet));
-      })));
-    };
-    subtableMakers[4] = function makeLookup4(subtable) {
-      check.assert(subtable.substFormat === 1, "Lookup type 4 substFormat must be 1.");
-      return new table.Table("substitutionTable", [
-        { name: "substFormat", type: "USHORT", value: 1 },
-        { name: "coverage", type: "TABLE", value: new table.Coverage(subtable.coverage) }
-      ].concat(table.tableList("ligSet", subtable.ligatureSets, function(ligatureSet) {
-        return new table.Table("ligatureSetTable", table.tableList("ligature", ligatureSet, function(ligature) {
-          return new table.Table(
-            "ligatureTable",
-            [{ name: "ligGlyph", type: "USHORT", value: ligature.ligGlyph }].concat(table.ushortList("component", ligature.components, ligature.components.length + 1))
-          );
-        }));
-      })));
-    };
-    subtableMakers[6] = function makeLookup6(subtable) {
-      if (subtable.substFormat === 1) {
-        var returnTable = new table.Table("chainContextTable", [
-          { name: "substFormat", type: "USHORT", value: subtable.substFormat },
-          { name: "coverage", type: "TABLE", value: new table.Coverage(subtable.coverage) }
-        ].concat(table.tableList("chainRuleSet", subtable.chainRuleSets, function(chainRuleSet) {
-          return new table.Table("chainRuleSetTable", table.tableList("chainRule", chainRuleSet, function(chainRule) {
-            var tableData2 = table.ushortList("backtrackGlyph", chainRule.backtrack, chainRule.backtrack.length).concat(table.ushortList("inputGlyph", chainRule.input, chainRule.input.length + 1)).concat(table.ushortList("lookaheadGlyph", chainRule.lookahead, chainRule.lookahead.length)).concat(table.ushortList("substitution", [], chainRule.lookupRecords.length));
-            chainRule.lookupRecords.forEach(function(record, i) {
-              tableData2 = tableData2.concat({ name: "sequenceIndex" + i, type: "USHORT", value: record.sequenceIndex }).concat({ name: "lookupListIndex" + i, type: "USHORT", value: record.lookupListIndex });
-            });
-            return new table.Table("chainRuleTable", tableData2);
-          }));
-        })));
-        return returnTable;
-      } else if (subtable.substFormat === 2) {
-        check.assert(false, "lookup type 6 format 2 is not yet supported.");
-      } else if (subtable.substFormat === 3) {
-        var tableData = [
-          { name: "substFormat", type: "USHORT", value: subtable.substFormat }
-        ];
-        tableData.push({ name: "backtrackGlyphCount", type: "USHORT", value: subtable.backtrackCoverage.length });
-        subtable.backtrackCoverage.forEach(function(coverage, i) {
-          tableData.push({ name: "backtrackCoverage" + i, type: "TABLE", value: new table.Coverage(coverage) });
-        });
-        tableData.push({ name: "inputGlyphCount", type: "USHORT", value: subtable.inputCoverage.length });
-        subtable.inputCoverage.forEach(function(coverage, i) {
-          tableData.push({ name: "inputCoverage" + i, type: "TABLE", value: new table.Coverage(coverage) });
-        });
-        tableData.push({ name: "lookaheadGlyphCount", type: "USHORT", value: subtable.lookaheadCoverage.length });
-        subtable.lookaheadCoverage.forEach(function(coverage, i) {
-          tableData.push({ name: "lookaheadCoverage" + i, type: "TABLE", value: new table.Coverage(coverage) });
-        });
-        tableData.push({ name: "substitutionCount", type: "USHORT", value: subtable.lookupRecords.length });
-        subtable.lookupRecords.forEach(function(record, i) {
-          tableData = tableData.concat({ name: "sequenceIndex" + i, type: "USHORT", value: record.sequenceIndex }).concat({ name: "lookupListIndex" + i, type: "USHORT", value: record.lookupListIndex });
-        });
-        var returnTable$1 = new table.Table("chainContextTable", tableData);
-        return returnTable$1;
-      }
-      check.assert(false, "lookup type 6 format must be 1, 2 or 3.");
-    };
-    gsub = { parse: parseGsubTable, make: makeGsubTable };
-    meta = { parse: parseMetaTable, make: makeMetaTable };
-    sfnt = { make: makeSfntTable, fontToTable: fontToSfntTable, computeCheckSum };
-    Layout.prototype = {
-      /**
-       * Binary search an object by "tag" property
-       * @instance
-       * @function searchTag
-       * @memberof opentype.Layout
-       * @param  {Array} arr
-       * @param  {string} tag
-       * @return {number}
-       */
-      searchTag,
-      /**
-       * Binary search in a list of numbers
-       * @instance
-       * @function binSearch
-       * @memberof opentype.Layout
-       * @param  {Array} arr
-       * @param  {number} value
-       * @return {number}
-       */
-      binSearch,
-      /**
-       * Get or create the Layout table (GSUB, GPOS etc).
-       * @param  {boolean} create - Whether to create a new one.
-       * @return {Object} The GSUB or GPOS table.
-       */
-      getTable: function(create) {
-        var layout = this.font.tables[this.tableName];
-        if (!layout && create) {
-          layout = this.font.tables[this.tableName] = this.createDefaultTable();
-        }
-        return layout;
-      },
-      /**
-       * Returns all scripts in the substitution table.
-       * @instance
-       * @return {Array}
-       */
-      getScriptNames: function() {
-        var layout = this.getTable();
-        if (!layout) {
-          return [];
-        }
-        return layout.scripts.map(function(script) {
-          return script.tag;
-        });
-      },
-      /**
-       * Returns the best bet for a script name.
-       * Returns 'DFLT' if it exists.
-       * If not, returns 'latn' if it exists.
-       * If neither exist, returns undefined.
-       */
-      getDefaultScriptName: function() {
-        var layout = this.getTable();
-        if (!layout) {
-          return;
-        }
-        var hasLatn = false;
-        for (var i = 0; i < layout.scripts.length; i++) {
-          var name = layout.scripts[i].tag;
-          if (name === "DFLT") {
-            return name;
-          }
-          if (name === "latn") {
-            hasLatn = true;
-          }
-        }
-        if (hasLatn) {
-          return "latn";
-        }
-      },
-      /**
-       * Returns all LangSysRecords in the given script.
-       * @instance
-       * @param {string} [script='DFLT']
-       * @param {boolean} create - forces the creation of this script table if it doesn't exist.
-       * @return {Object} An object with tag and script properties.
-       */
-      getScriptTable: function(script, create) {
-        var layout = this.getTable(create);
-        if (layout) {
-          script = script || "DFLT";
-          var scripts = layout.scripts;
-          var pos = searchTag(layout.scripts, script);
-          if (pos >= 0) {
-            return scripts[pos].script;
-          } else if (create) {
-            var scr = {
-              tag: script,
-              script: {
-                defaultLangSys: { reserved: 0, reqFeatureIndex: 65535, featureIndexes: [] },
-                langSysRecords: []
-              }
-            };
-            scripts.splice(-1 - pos, 0, scr);
-            return scr.script;
-          }
-        }
-      },
-      /**
-       * Returns a language system table
-       * @instance
-       * @param {string} [script='DFLT']
-       * @param {string} [language='dlft']
-       * @param {boolean} create - forces the creation of this langSysTable if it doesn't exist.
-       * @return {Object}
-       */
-      getLangSysTable: function(script, language, create) {
-        var scriptTable = this.getScriptTable(script, create);
-        if (scriptTable) {
-          if (!language || language === "dflt" || language === "DFLT") {
-            return scriptTable.defaultLangSys;
-          }
-          var pos = searchTag(scriptTable.langSysRecords, language);
-          if (pos >= 0) {
-            return scriptTable.langSysRecords[pos].langSys;
-          } else if (create) {
-            var langSysRecord = {
-              tag: language,
-              langSys: { reserved: 0, reqFeatureIndex: 65535, featureIndexes: [] }
-            };
-            scriptTable.langSysRecords.splice(-1 - pos, 0, langSysRecord);
-            return langSysRecord.langSys;
-          }
-        }
-      },
-      /**
-       * Get a specific feature table.
-       * @instance
-       * @param {string} [script='DFLT']
-       * @param {string} [language='dlft']
-       * @param {string} feature - One of the codes listed at https://www.microsoft.com/typography/OTSPEC/featurelist.htm
-       * @param {boolean} create - forces the creation of the feature table if it doesn't exist.
-       * @return {Object}
-       */
-      getFeatureTable: function(script, language, feature, create) {
-        var langSysTable2 = this.getLangSysTable(script, language, create);
-        if (langSysTable2) {
-          var featureRecord;
-          var featIndexes = langSysTable2.featureIndexes;
-          var allFeatures = this.font.tables[this.tableName].features;
-          for (var i = 0; i < featIndexes.length; i++) {
-            featureRecord = allFeatures[featIndexes[i]];
-            if (featureRecord.tag === feature) {
-              return featureRecord.feature;
-            }
-          }
-          if (create) {
-            var index = allFeatures.length;
-            check.assert(index === 0 || feature >= allFeatures[index - 1].tag, "Features must be added in alphabetical order.");
-            featureRecord = {
-              tag: feature,
-              feature: { params: 0, lookupListIndexes: [] }
-            };
-            allFeatures.push(featureRecord);
-            featIndexes.push(index);
-            return featureRecord.feature;
-          }
-        }
-      },
-      /**
-       * Get the lookup tables of a given type for a script/language/feature.
-       * @instance
-       * @param {string} [script='DFLT']
-       * @param {string} [language='dlft']
-       * @param {string} feature - 4-letter feature code
-       * @param {number} lookupType - 1 to 9
-       * @param {boolean} create - forces the creation of the lookup table if it doesn't exist, with no subtables.
-       * @return {Object[]}
-       */
-      getLookupTables: function(script, language, feature, lookupType, create) {
-        var featureTable = this.getFeatureTable(script, language, feature, create);
-        var tables = [];
-        if (featureTable) {
-          var lookupTable;
-          var lookupListIndexes = featureTable.lookupListIndexes;
-          var allLookups = this.font.tables[this.tableName].lookups;
-          for (var i = 0; i < lookupListIndexes.length; i++) {
-            lookupTable = allLookups[lookupListIndexes[i]];
-            if (lookupTable.lookupType === lookupType) {
-              tables.push(lookupTable);
-            }
-          }
-          if (tables.length === 0 && create) {
-            lookupTable = {
-              lookupType,
-              lookupFlag: 0,
-              subtables: [],
-              markFilteringSet: void 0
-            };
-            var index = allLookups.length;
-            allLookups.push(lookupTable);
-            lookupListIndexes.push(index);
-            return [lookupTable];
-          }
-        }
-        return tables;
-      },
-      /**
-       * Find a glyph in a class definition table
-       * https://docs.microsoft.com/en-us/typography/opentype/spec/chapter2#class-definition-table
-       * @param {object} classDefTable - an OpenType Layout class definition table
-       * @param {number} glyphIndex - the index of the glyph to find
-       * @returns {number} -1 if not found
-       */
-      getGlyphClass: function(classDefTable, glyphIndex) {
-        switch (classDefTable.format) {
-          case 1:
-            if (classDefTable.startGlyph <= glyphIndex && glyphIndex < classDefTable.startGlyph + classDefTable.classes.length) {
-              return classDefTable.classes[glyphIndex - classDefTable.startGlyph];
-            }
-            return 0;
-          case 2:
-            var range = searchRange(classDefTable.ranges, glyphIndex);
-            return range ? range.classId : 0;
-        }
-      },
-      /**
-       * Find a glyph in a coverage table
-       * https://docs.microsoft.com/en-us/typography/opentype/spec/chapter2#coverage-table
-       * @param {object} coverageTable - an OpenType Layout coverage table
-       * @param {number} glyphIndex - the index of the glyph to find
-       * @returns {number} -1 if not found
-       */
-      getCoverageIndex: function(coverageTable, glyphIndex) {
-        switch (coverageTable.format) {
-          case 1:
-            var index = binSearch(coverageTable.glyphs, glyphIndex);
-            return index >= 0 ? index : -1;
-          case 2:
-            var range = searchRange(coverageTable.ranges, glyphIndex);
-            return range ? range.index + glyphIndex - range.start : -1;
-        }
-      },
-      /**
-       * Returns the list of glyph indexes of a coverage table.
-       * Format 1: the list is stored raw
-       * Format 2: compact list as range records.
-       * @instance
-       * @param  {Object} coverageTable
-       * @return {Array}
-       */
-      expandCoverage: function(coverageTable) {
-        if (coverageTable.format === 1) {
-          return coverageTable.glyphs;
-        } else {
-          var glyphs = [];
-          var ranges = coverageTable.ranges;
-          for (var i = 0; i < ranges.length; i++) {
-            var range = ranges[i];
-            var start = range.start;
-            var end = range.end;
-            for (var j = start; j <= end; j++) {
-              glyphs.push(j);
-            }
-          }
-          return glyphs;
-        }
-      }
-    };
-    Position.prototype = Layout.prototype;
-    Position.prototype.init = function() {
-      var script = this.getDefaultScriptName();
-      this.defaultKerningTables = this.getKerningTables(script);
-    };
-    Position.prototype.getKerningValue = function(kerningLookups, leftIndex, rightIndex) {
-      for (var i = 0; i < kerningLookups.length; i++) {
-        var subtables = kerningLookups[i].subtables;
-        for (var j = 0; j < subtables.length; j++) {
-          var subtable = subtables[j];
-          var covIndex = this.getCoverageIndex(subtable.coverage, leftIndex);
-          if (covIndex < 0) {
-            continue;
-          }
-          switch (subtable.posFormat) {
-            case 1:
-              var pairSet = subtable.pairSets[covIndex];
-              for (var k = 0; k < pairSet.length; k++) {
-                var pair = pairSet[k];
-                if (pair.secondGlyph === rightIndex) {
-                  return pair.value1 && pair.value1.xAdvance || 0;
-                }
-              }
-              break;
-            // left glyph found, not right glyph - try next subtable
-            case 2:
-              var class1 = this.getGlyphClass(subtable.classDef1, leftIndex);
-              var class2 = this.getGlyphClass(subtable.classDef2, rightIndex);
-              var pair$1 = subtable.classRecords[class1][class2];
-              return pair$1.value1 && pair$1.value1.xAdvance || 0;
-          }
-        }
-      }
-      return 0;
-    };
-    Position.prototype.getKerningTables = function(script, language) {
-      if (this.font.tables.gpos) {
-        return this.getLookupTables(script, language, "kern", 2);
-      }
-    };
-    Substitution.prototype = Layout.prototype;
-    Substitution.prototype.createDefaultTable = function() {
-      return {
-        version: 1,
-        scripts: [{
-          tag: "DFLT",
-          script: {
-            defaultLangSys: { reserved: 0, reqFeatureIndex: 65535, featureIndexes: [] },
-            langSysRecords: []
-          }
-        }],
-        features: [],
-        lookups: []
-      };
-    };
-    Substitution.prototype.getSingle = function(feature, script, language) {
-      var substitutions = [];
-      var lookupTables = this.getLookupTables(script, language, feature, 1);
-      for (var idx = 0; idx < lookupTables.length; idx++) {
-        var subtables = lookupTables[idx].subtables;
-        for (var i = 0; i < subtables.length; i++) {
-          var subtable = subtables[i];
-          var glyphs = this.expandCoverage(subtable.coverage);
-          var j = void 0;
-          if (subtable.substFormat === 1) {
-            var delta = subtable.deltaGlyphId;
-            for (j = 0; j < glyphs.length; j++) {
-              var glyph = glyphs[j];
-              substitutions.push({ sub: glyph, by: glyph + delta });
-            }
-          } else {
-            var substitute = subtable.substitute;
-            for (j = 0; j < glyphs.length; j++) {
-              substitutions.push({ sub: glyphs[j], by: substitute[j] });
-            }
-          }
-        }
-      }
-      return substitutions;
-    };
-    Substitution.prototype.getMultiple = function(feature, script, language) {
-      var substitutions = [];
-      var lookupTables = this.getLookupTables(script, language, feature, 2);
-      for (var idx = 0; idx < lookupTables.length; idx++) {
-        var subtables = lookupTables[idx].subtables;
-        for (var i = 0; i < subtables.length; i++) {
-          var subtable = subtables[i];
-          var glyphs = this.expandCoverage(subtable.coverage);
-          var j = void 0;
-          for (j = 0; j < glyphs.length; j++) {
-            var glyph = glyphs[j];
-            var replacements = subtable.sequences[j];
-            substitutions.push({ sub: glyph, by: replacements });
-          }
-        }
-      }
-      return substitutions;
-    };
-    Substitution.prototype.getAlternates = function(feature, script, language) {
-      var alternates = [];
-      var lookupTables = this.getLookupTables(script, language, feature, 3);
-      for (var idx = 0; idx < lookupTables.length; idx++) {
-        var subtables = lookupTables[idx].subtables;
-        for (var i = 0; i < subtables.length; i++) {
-          var subtable = subtables[i];
-          var glyphs = this.expandCoverage(subtable.coverage);
-          var alternateSets = subtable.alternateSets;
-          for (var j = 0; j < glyphs.length; j++) {
-            alternates.push({ sub: glyphs[j], by: alternateSets[j] });
-          }
-        }
-      }
-      return alternates;
-    };
-    Substitution.prototype.getLigatures = function(feature, script, language) {
-      var ligatures = [];
-      var lookupTables = this.getLookupTables(script, language, feature, 4);
-      for (var idx = 0; idx < lookupTables.length; idx++) {
-        var subtables = lookupTables[idx].subtables;
-        for (var i = 0; i < subtables.length; i++) {
-          var subtable = subtables[i];
-          var glyphs = this.expandCoverage(subtable.coverage);
-          var ligatureSets = subtable.ligatureSets;
-          for (var j = 0; j < glyphs.length; j++) {
-            var startGlyph = glyphs[j];
-            var ligSet = ligatureSets[j];
-            for (var k = 0; k < ligSet.length; k++) {
-              var lig = ligSet[k];
-              ligatures.push({
-                sub: [startGlyph].concat(lig.components),
-                by: lig.ligGlyph
-              });
-            }
-          }
-        }
-      }
-      return ligatures;
-    };
-    Substitution.prototype.addSingle = function(feature, substitution, script, language) {
-      var lookupTable = this.getLookupTables(script, language, feature, 1, true)[0];
-      var subtable = getSubstFormat(lookupTable, 2, {
-        // lookup type 1 subtable, format 2, coverage format 1
-        substFormat: 2,
-        coverage: { format: 1, glyphs: [] },
-        substitute: []
-      });
-      check.assert(subtable.coverage.format === 1, "Single: unable to modify coverage table format " + subtable.coverage.format);
-      var coverageGlyph = substitution.sub;
-      var pos = this.binSearch(subtable.coverage.glyphs, coverageGlyph);
-      if (pos < 0) {
-        pos = -1 - pos;
-        subtable.coverage.glyphs.splice(pos, 0, coverageGlyph);
-        subtable.substitute.splice(pos, 0, 0);
-      }
-      subtable.substitute[pos] = substitution.by;
-    };
-    Substitution.prototype.addMultiple = function(feature, substitution, script, language) {
-      check.assert(substitution.by instanceof Array && substitution.by.length > 1, 'Multiple: "by" must be an array of two or more ids');
-      var lookupTable = this.getLookupTables(script, language, feature, 2, true)[0];
-      var subtable = getSubstFormat(lookupTable, 1, {
-        // lookup type 2 subtable, format 1, coverage format 1
-        substFormat: 1,
-        coverage: { format: 1, glyphs: [] },
-        sequences: []
-      });
-      check.assert(subtable.coverage.format === 1, "Multiple: unable to modify coverage table format " + subtable.coverage.format);
-      var coverageGlyph = substitution.sub;
-      var pos = this.binSearch(subtable.coverage.glyphs, coverageGlyph);
-      if (pos < 0) {
-        pos = -1 - pos;
-        subtable.coverage.glyphs.splice(pos, 0, coverageGlyph);
-        subtable.sequences.splice(pos, 0, 0);
-      }
-      subtable.sequences[pos] = substitution.by;
-    };
-    Substitution.prototype.addAlternate = function(feature, substitution, script, language) {
-      var lookupTable = this.getLookupTables(script, language, feature, 3, true)[0];
-      var subtable = getSubstFormat(lookupTable, 1, {
-        // lookup type 3 subtable, format 1, coverage format 1
-        substFormat: 1,
-        coverage: { format: 1, glyphs: [] },
-        alternateSets: []
-      });
-      check.assert(subtable.coverage.format === 1, "Alternate: unable to modify coverage table format " + subtable.coverage.format);
-      var coverageGlyph = substitution.sub;
-      var pos = this.binSearch(subtable.coverage.glyphs, coverageGlyph);
-      if (pos < 0) {
-        pos = -1 - pos;
-        subtable.coverage.glyphs.splice(pos, 0, coverageGlyph);
-        subtable.alternateSets.splice(pos, 0, 0);
-      }
-      subtable.alternateSets[pos] = substitution.by;
-    };
-    Substitution.prototype.addLigature = function(feature, ligature, script, language) {
-      var lookupTable = this.getLookupTables(script, language, feature, 4, true)[0];
-      var subtable = lookupTable.subtables[0];
-      if (!subtable) {
-        subtable = {
-          // lookup type 4 subtable, format 1, coverage format 1
-          substFormat: 1,
-          coverage: { format: 1, glyphs: [] },
-          ligatureSets: []
-        };
-        lookupTable.subtables[0] = subtable;
-      }
-      check.assert(subtable.coverage.format === 1, "Ligature: unable to modify coverage table format " + subtable.coverage.format);
-      var coverageGlyph = ligature.sub[0];
-      var ligComponents = ligature.sub.slice(1);
-      var ligatureTable = {
-        ligGlyph: ligature.by,
-        components: ligComponents
-      };
-      var pos = this.binSearch(subtable.coverage.glyphs, coverageGlyph);
-      if (pos >= 0) {
-        var ligatureSet = subtable.ligatureSets[pos];
-        for (var i = 0; i < ligatureSet.length; i++) {
-          if (arraysEqual(ligatureSet[i].components, ligComponents)) {
-            return;
-          }
-        }
-        ligatureSet.push(ligatureTable);
-      } else {
-        pos = -1 - pos;
-        subtable.coverage.glyphs.splice(pos, 0, coverageGlyph);
-        subtable.ligatureSets.splice(pos, 0, [ligatureTable]);
-      }
-    };
-    Substitution.prototype.getFeature = function(feature, script, language) {
-      if (/ss\d\d/.test(feature)) {
-        return this.getSingle(feature, script, language);
-      }
-      switch (feature) {
-        case "aalt":
-        case "salt":
-          return this.getSingle(feature, script, language).concat(this.getAlternates(feature, script, language));
-        case "dlig":
-        case "liga":
-        case "rlig":
-          return this.getLigatures(feature, script, language);
-        case "ccmp":
-          return this.getMultiple(feature, script, language).concat(this.getLigatures(feature, script, language));
-        case "stch":
-          return this.getMultiple(feature, script, language);
-      }
-      return void 0;
-    };
-    Substitution.prototype.add = function(feature, sub, script, language) {
-      if (/ss\d\d/.test(feature)) {
-        return this.addSingle(feature, sub, script, language);
-      }
-      switch (feature) {
-        case "aalt":
-        case "salt":
-          if (typeof sub.by === "number") {
-            return this.addSingle(feature, sub, script, language);
-          }
-          return this.addAlternate(feature, sub, script, language);
-        case "dlig":
-        case "liga":
-        case "rlig":
-          return this.addLigature(feature, sub, script, language);
-        case "ccmp":
-          if (sub.by instanceof Array) {
-            return this.addMultiple(feature, sub, script, language);
-          }
-          return this.addLigature(feature, sub, script, language);
-      }
-      return void 0;
-    };
-    glyf = { getPath, parse: parseGlyfTable };
-    roundSuper = function(v) {
-      var period = this.srPeriod;
-      var phase = this.srPhase;
-      var threshold = this.srThreshold;
-      var sign2 = 1;
-      if (v < 0) {
-        v = -v;
-        sign2 = -1;
-      }
-      v += threshold - phase;
-      v = Math.trunc(v / period) * period;
-      v += phase;
-      if (v < 0) {
-        return phase * sign2;
-      }
-      return v * sign2;
-    };
-    xUnitVector = {
-      x: 1,
-      y: 0,
-      axis: "x",
-      // Gets the projected distance between two points.
-      // o1/o2 ... if true, respective original position is used.
-      distance: function(p1, p2, o1, o2) {
-        return (o1 ? p1.xo : p1.x) - (o2 ? p2.xo : p2.x);
-      },
-      // Moves point p so the moved position has the same relative
-      // position to the moved positions of rp1 and rp2 than the
-      // original positions had.
-      //
-      // See APPENDIX on INTERPOLATE at the bottom of this file.
-      interpolate: function(p, rp1, rp2, pv) {
-        var do1;
-        var do2;
-        var doa1;
-        var doa2;
-        var dm1;
-        var dm2;
-        var dt;
-        if (!pv || pv === this) {
-          do1 = p.xo - rp1.xo;
-          do2 = p.xo - rp2.xo;
-          dm1 = rp1.x - rp1.xo;
-          dm2 = rp2.x - rp2.xo;
-          doa1 = Math.abs(do1);
-          doa2 = Math.abs(do2);
-          dt = doa1 + doa2;
-          if (dt === 0) {
-            p.x = p.xo + (dm1 + dm2) / 2;
-            return;
-          }
-          p.x = p.xo + (dm1 * doa2 + dm2 * doa1) / dt;
-          return;
-        }
-        do1 = pv.distance(p, rp1, true, true);
-        do2 = pv.distance(p, rp2, true, true);
-        dm1 = pv.distance(rp1, rp1, false, true);
-        dm2 = pv.distance(rp2, rp2, false, true);
-        doa1 = Math.abs(do1);
-        doa2 = Math.abs(do2);
-        dt = doa1 + doa2;
-        if (dt === 0) {
-          xUnitVector.setRelative(p, p, (dm1 + dm2) / 2, pv, true);
-          return;
-        }
-        xUnitVector.setRelative(p, p, (dm1 * doa2 + dm2 * doa1) / dt, pv, true);
-      },
-      // Slope of line normal to this
-      normalSlope: Number.NEGATIVE_INFINITY,
-      // Sets the point 'p' relative to point 'rp'
-      // by the distance 'd'.
-      //
-      // See APPENDIX on SETRELATIVE at the bottom of this file.
-      //
-      // p   ... point to set
-      // rp  ... reference point
-      // d   ... distance on projection vector
-      // pv  ... projection vector (undefined = this)
-      // org ... if true, uses the original position of rp as reference.
-      setRelative: function(p, rp, d, pv, org) {
-        if (!pv || pv === this) {
-          p.x = (org ? rp.xo : rp.x) + d;
-          return;
-        }
-        var rpx = org ? rp.xo : rp.x;
-        var rpy = org ? rp.yo : rp.y;
-        var rpdx = rpx + d * pv.x;
-        var rpdy = rpy + d * pv.y;
-        p.x = rpdx + (p.y - rpdy) / pv.normalSlope;
-      },
-      // Slope of vector line.
-      slope: 0,
-      // Touches the point p.
-      touch: function(p) {
-        p.xTouched = true;
-      },
-      // Tests if a point p is touched.
-      touched: function(p) {
-        return p.xTouched;
-      },
-      // Untouches the point p.
-      untouch: function(p) {
-        p.xTouched = false;
-      }
-    };
-    yUnitVector = {
-      x: 0,
-      y: 1,
-      axis: "y",
-      // Gets the projected distance between two points.
-      // o1/o2 ... if true, respective original position is used.
-      distance: function(p1, p2, o1, o2) {
-        return (o1 ? p1.yo : p1.y) - (o2 ? p2.yo : p2.y);
-      },
-      // Moves point p so the moved position has the same relative
-      // position to the moved positions of rp1 and rp2 than the
-      // original positions had.
-      //
-      // See APPENDIX on INTERPOLATE at the bottom of this file.
-      interpolate: function(p, rp1, rp2, pv) {
-        var do1;
-        var do2;
-        var doa1;
-        var doa2;
-        var dm1;
-        var dm2;
-        var dt;
-        if (!pv || pv === this) {
-          do1 = p.yo - rp1.yo;
-          do2 = p.yo - rp2.yo;
-          dm1 = rp1.y - rp1.yo;
-          dm2 = rp2.y - rp2.yo;
-          doa1 = Math.abs(do1);
-          doa2 = Math.abs(do2);
-          dt = doa1 + doa2;
-          if (dt === 0) {
-            p.y = p.yo + (dm1 + dm2) / 2;
-            return;
-          }
-          p.y = p.yo + (dm1 * doa2 + dm2 * doa1) / dt;
-          return;
-        }
-        do1 = pv.distance(p, rp1, true, true);
-        do2 = pv.distance(p, rp2, true, true);
-        dm1 = pv.distance(rp1, rp1, false, true);
-        dm2 = pv.distance(rp2, rp2, false, true);
-        doa1 = Math.abs(do1);
-        doa2 = Math.abs(do2);
-        dt = doa1 + doa2;
-        if (dt === 0) {
-          yUnitVector.setRelative(p, p, (dm1 + dm2) / 2, pv, true);
-          return;
-        }
-        yUnitVector.setRelative(p, p, (dm1 * doa2 + dm2 * doa1) / dt, pv, true);
-      },
-      // Slope of line normal to this.
-      normalSlope: 0,
-      // Sets the point 'p' relative to point 'rp'
-      // by the distance 'd'
-      //
-      // See APPENDIX on SETRELATIVE at the bottom of this file.
-      //
-      // p   ... point to set
-      // rp  ... reference point
-      // d   ... distance on projection vector
-      // pv  ... projection vector (undefined = this)
-      // org ... if true, uses the original position of rp as reference.
-      setRelative: function(p, rp, d, pv, org) {
-        if (!pv || pv === this) {
-          p.y = (org ? rp.yo : rp.y) + d;
-          return;
-        }
-        var rpx = org ? rp.xo : rp.x;
-        var rpy = org ? rp.yo : rp.y;
-        var rpdx = rpx + d * pv.x;
-        var rpdy = rpy + d * pv.y;
-        p.y = rpdy + pv.normalSlope * (p.x - rpdx);
-      },
-      // Slope of vector line.
-      slope: Number.POSITIVE_INFINITY,
-      // Touches the point p.
-      touch: function(p) {
-        p.yTouched = true;
-      },
-      // Tests if a point p is touched.
-      touched: function(p) {
-        return p.yTouched;
-      },
-      // Untouches the point p.
-      untouch: function(p) {
-        p.yTouched = false;
-      }
-    };
-    Object.freeze(xUnitVector);
-    Object.freeze(yUnitVector);
-    UnitVector.prototype.distance = function(p1, p2, o1, o2) {
-      return this.x * xUnitVector.distance(p1, p2, o1, o2) + this.y * yUnitVector.distance(p1, p2, o1, o2);
-    };
-    UnitVector.prototype.interpolate = function(p, rp1, rp2, pv) {
-      var dm1;
-      var dm2;
-      var do1;
-      var do2;
-      var doa1;
-      var doa2;
-      var dt;
-      do1 = pv.distance(p, rp1, true, true);
-      do2 = pv.distance(p, rp2, true, true);
-      dm1 = pv.distance(rp1, rp1, false, true);
-      dm2 = pv.distance(rp2, rp2, false, true);
-      doa1 = Math.abs(do1);
-      doa2 = Math.abs(do2);
-      dt = doa1 + doa2;
-      if (dt === 0) {
-        this.setRelative(p, p, (dm1 + dm2) / 2, pv, true);
-        return;
-      }
-      this.setRelative(p, p, (dm1 * doa2 + dm2 * doa1) / dt, pv, true);
-    };
-    UnitVector.prototype.setRelative = function(p, rp, d, pv, org) {
-      pv = pv || this;
-      var rpx = org ? rp.xo : rp.x;
-      var rpy = org ? rp.yo : rp.y;
-      var rpdx = rpx + d * pv.x;
-      var rpdy = rpy + d * pv.y;
-      var pvns = pv.normalSlope;
-      var fvs = this.slope;
-      var px = p.x;
-      var py = p.y;
-      p.x = (fvs * px - pvns * rpdx + rpdy - py) / (fvs - pvns);
-      p.y = fvs * (p.x - px) + py;
-    };
-    UnitVector.prototype.touch = function(p) {
-      p.xTouched = true;
-      p.yTouched = true;
-    };
-    HPoint.prototype.nextTouched = function(v) {
-      var p = this.nextPointOnContour;
-      while (!v.touched(p) && p !== this) {
-        p = p.nextPointOnContour;
-      }
-      return p;
-    };
-    HPoint.prototype.prevTouched = function(v) {
-      var p = this.prevPointOnContour;
-      while (!v.touched(p) && p !== this) {
-        p = p.prevPointOnContour;
-      }
-      return p;
-    };
-    HPZero = Object.freeze(new HPoint(0, 0));
-    defaultState = {
-      cvCutIn: 17 / 16,
-      // control value cut in
-      deltaBase: 9,
-      deltaShift: 0.125,
-      loop: 1,
-      // loops some instructions
-      minDis: 1,
-      // minimum distance
-      autoFlip: true
-    };
-    Hinting.prototype.exec = function(glyph, ppem) {
-      if (typeof ppem !== "number") {
-        throw new Error("Point size is not a number!");
-      }
-      if (this._errorState > 2) {
-        return;
-      }
-      var font = this.font;
-      var prepState = this._prepState;
-      if (!prepState || prepState.ppem !== ppem) {
-        var fpgmState = this._fpgmState;
-        if (!fpgmState) {
-          State.prototype = defaultState;
-          fpgmState = this._fpgmState = new State("fpgm", font.tables.fpgm);
-          fpgmState.funcs = [];
-          fpgmState.font = font;
-          if (exports.DEBUG) {
-            console.log("---EXEC FPGM---");
-            fpgmState.step = -1;
-          }
-          try {
-            exec(fpgmState);
-          } catch (e) {
-            console.log("Hinting error in FPGM:" + e);
-            this._errorState = 3;
-            return;
-          }
-        }
-        State.prototype = fpgmState;
-        prepState = this._prepState = new State("prep", font.tables.prep);
-        prepState.ppem = ppem;
-        var oCvt = font.tables.cvt;
-        if (oCvt) {
-          var cvt = prepState.cvt = new Array(oCvt.length);
-          var scale = ppem / font.unitsPerEm;
-          for (var c = 0; c < oCvt.length; c++) {
-            cvt[c] = oCvt[c] * scale;
-          }
-        } else {
-          prepState.cvt = [];
-        }
-        if (exports.DEBUG) {
-          console.log("---EXEC PREP---");
-          prepState.step = -1;
-        }
-        try {
-          exec(prepState);
-        } catch (e) {
-          if (this._errorState < 2) {
-            console.log("Hinting error in PREP:" + e);
-          }
-          this._errorState = 2;
-        }
-      }
-      if (this._errorState > 1) {
-        return;
-      }
-      try {
-        return execGlyph(glyph, prepState);
-      } catch (e) {
-        if (this._errorState < 1) {
-          console.log("Hinting error:" + e);
-          console.log("Note: further hinting errors are silenced");
-        }
-        this._errorState = 1;
-        return void 0;
-      }
-    };
-    execGlyph = function(glyph, prepState) {
-      var xScale = prepState.ppem / prepState.font.unitsPerEm;
-      var yScale = xScale;
-      var components = glyph.components;
-      var contours;
-      var gZone;
-      var state;
-      State.prototype = prepState;
-      if (!components) {
-        state = new State("glyf", glyph.instructions);
-        if (exports.DEBUG) {
-          console.log("---EXEC GLYPH---");
-          state.step = -1;
-        }
-        execComponent(glyph, state, xScale, yScale);
-        gZone = state.gZone;
-      } else {
-        var font = prepState.font;
-        gZone = [];
-        contours = [];
-        for (var i = 0; i < components.length; i++) {
-          var c = components[i];
-          var cg = font.glyphs.get(c.glyphIndex);
-          state = new State("glyf", cg.instructions);
-          if (exports.DEBUG) {
-            console.log("---EXEC COMP " + i + "---");
-            state.step = -1;
-          }
-          execComponent(cg, state, xScale, yScale);
-          var dx = Math.round(c.dx * xScale);
-          var dy = Math.round(c.dy * yScale);
-          var gz = state.gZone;
-          var cc = state.contours;
-          for (var pi = 0; pi < gz.length; pi++) {
-            var p = gz[pi];
-            p.xTouched = p.yTouched = false;
-            p.xo = p.x = p.x + dx;
-            p.yo = p.y = p.y + dy;
-          }
-          var gLen = gZone.length;
-          gZone.push.apply(gZone, gz);
-          for (var j = 0; j < cc.length; j++) {
-            contours.push(cc[j] + gLen);
-          }
-        }
-        if (glyph.instructions && !state.inhibitGridFit) {
-          state = new State("glyf", glyph.instructions);
-          state.gZone = state.z0 = state.z1 = state.z2 = gZone;
-          state.contours = contours;
-          gZone.push(
-            new HPoint(0, 0),
-            new HPoint(Math.round(glyph.advanceWidth * xScale), 0)
-          );
-          if (exports.DEBUG) {
-            console.log("---EXEC COMPOSITE---");
-            state.step = -1;
-          }
-          exec(state);
-          gZone.length -= 2;
-        }
-      }
-      return gZone;
-    };
-    execComponent = function(glyph, state, xScale, yScale) {
-      var points = glyph.points || [];
-      var pLen = points.length;
-      var gZone = state.gZone = state.z0 = state.z1 = state.z2 = [];
-      var contours = state.contours = [];
-      var cp;
-      for (var i = 0; i < pLen; i++) {
-        cp = points[i];
-        gZone[i] = new HPoint(
-          cp.x * xScale,
-          cp.y * yScale,
-          cp.lastPointOfContour,
-          cp.onCurve
-        );
-      }
-      var sp;
-      var np;
-      for (var i$1 = 0; i$1 < pLen; i$1++) {
-        cp = gZone[i$1];
-        if (!sp) {
-          sp = cp;
-          contours.push(i$1);
-        }
-        if (cp.lastPointOfContour) {
-          cp.nextPointOnContour = sp;
-          sp.prevPointOnContour = cp;
-          sp = void 0;
-        } else {
-          np = gZone[i$1 + 1];
-          cp.nextPointOnContour = np;
-          np.prevPointOnContour = cp;
-        }
-      }
-      if (state.inhibitGridFit) {
-        return;
-      }
-      if (exports.DEBUG) {
-        console.log("PROCESSING GLYPH", state.stack);
-        for (var i$2 = 0; i$2 < pLen; i$2++) {
-          console.log(i$2, gZone[i$2].x, gZone[i$2].y);
-        }
-      }
-      gZone.push(
-        new HPoint(0, 0),
-        new HPoint(Math.round(glyph.advanceWidth * xScale), 0)
-      );
-      exec(state);
-      gZone.length -= 2;
-      if (exports.DEBUG) {
-        console.log("FINISHED GLYPH", state.stack);
-        for (var i$3 = 0; i$3 < pLen; i$3++) {
-          console.log(i$3, gZone[i$3].x, gZone[i$3].y);
-        }
-      }
-    };
-    exec = function(state) {
-      var prog = state.prog;
-      if (!prog) {
-        return;
-      }
-      var pLen = prog.length;
-      var ins;
-      for (state.ip = 0; state.ip < pLen; state.ip++) {
-        if (exports.DEBUG) {
-          state.step++;
-        }
-        ins = instructionTable[prog[state.ip]];
-        if (!ins) {
-          throw new Error(
-            "unknown instruction: 0x" + Number(prog[state.ip]).toString(16)
-          );
-        }
-        ins(state);
-      }
-    };
-    instructionTable = [
-      /* 0x00 */
-      SVTCA.bind(void 0, yUnitVector),
-      /* 0x01 */
-      SVTCA.bind(void 0, xUnitVector),
-      /* 0x02 */
-      SPVTCA.bind(void 0, yUnitVector),
-      /* 0x03 */
-      SPVTCA.bind(void 0, xUnitVector),
-      /* 0x04 */
-      SFVTCA.bind(void 0, yUnitVector),
-      /* 0x05 */
-      SFVTCA.bind(void 0, xUnitVector),
-      /* 0x06 */
-      SPVTL.bind(void 0, 0),
-      /* 0x07 */
-      SPVTL.bind(void 0, 1),
-      /* 0x08 */
-      SFVTL.bind(void 0, 0),
-      /* 0x09 */
-      SFVTL.bind(void 0, 1),
-      /* 0x0A */
-      SPVFS,
-      /* 0x0B */
-      SFVFS,
-      /* 0x0C */
-      GPV,
-      /* 0x0D */
-      GFV,
-      /* 0x0E */
-      SFVTPV,
-      /* 0x0F */
-      ISECT,
-      /* 0x10 */
-      SRP0,
-      /* 0x11 */
-      SRP1,
-      /* 0x12 */
-      SRP2,
-      /* 0x13 */
-      SZP0,
-      /* 0x14 */
-      SZP1,
-      /* 0x15 */
-      SZP2,
-      /* 0x16 */
-      SZPS,
-      /* 0x17 */
-      SLOOP,
-      /* 0x18 */
-      RTG,
-      /* 0x19 */
-      RTHG,
-      /* 0x1A */
-      SMD,
-      /* 0x1B */
-      ELSE,
-      /* 0x1C */
-      JMPR,
-      /* 0x1D */
-      SCVTCI,
-      /* 0x1E */
-      void 0,
-      // TODO SSWCI
-      /* 0x1F */
-      void 0,
-      // TODO SSW
-      /* 0x20 */
-      DUP,
-      /* 0x21 */
-      POP,
-      /* 0x22 */
-      CLEAR,
-      /* 0x23 */
-      SWAP,
-      /* 0x24 */
-      DEPTH,
-      /* 0x25 */
-      CINDEX,
-      /* 0x26 */
-      MINDEX,
-      /* 0x27 */
-      void 0,
-      // TODO ALIGNPTS
-      /* 0x28 */
-      void 0,
-      /* 0x29 */
-      void 0,
-      // TODO UTP
-      /* 0x2A */
-      LOOPCALL,
-      /* 0x2B */
-      CALL,
-      /* 0x2C */
-      FDEF,
-      /* 0x2D */
-      void 0,
-      // ENDF (eaten by FDEF)
-      /* 0x2E */
-      MDAP.bind(void 0, 0),
-      /* 0x2F */
-      MDAP.bind(void 0, 1),
-      /* 0x30 */
-      IUP.bind(void 0, yUnitVector),
-      /* 0x31 */
-      IUP.bind(void 0, xUnitVector),
-      /* 0x32 */
-      SHP.bind(void 0, 0),
-      /* 0x33 */
-      SHP.bind(void 0, 1),
-      /* 0x34 */
-      SHC.bind(void 0, 0),
-      /* 0x35 */
-      SHC.bind(void 0, 1),
-      /* 0x36 */
-      SHZ.bind(void 0, 0),
-      /* 0x37 */
-      SHZ.bind(void 0, 1),
-      /* 0x38 */
-      SHPIX,
-      /* 0x39 */
-      IP,
-      /* 0x3A */
-      MSIRP.bind(void 0, 0),
-      /* 0x3B */
-      MSIRP.bind(void 0, 1),
-      /* 0x3C */
-      ALIGNRP,
-      /* 0x3D */
-      RTDG,
-      /* 0x3E */
-      MIAP.bind(void 0, 0),
-      /* 0x3F */
-      MIAP.bind(void 0, 1),
-      /* 0x40 */
-      NPUSHB,
-      /* 0x41 */
-      NPUSHW,
-      /* 0x42 */
-      WS,
-      /* 0x43 */
-      RS,
-      /* 0x44 */
-      WCVTP,
-      /* 0x45 */
-      RCVT,
-      /* 0x46 */
-      GC.bind(void 0, 0),
-      /* 0x47 */
-      GC.bind(void 0, 1),
-      /* 0x48 */
-      void 0,
-      // TODO SCFS
-      /* 0x49 */
-      MD.bind(void 0, 0),
-      /* 0x4A */
-      MD.bind(void 0, 1),
-      /* 0x4B */
-      MPPEM,
-      /* 0x4C */
-      void 0,
-      // TODO MPS
-      /* 0x4D */
-      FLIPON,
-      /* 0x4E */
-      void 0,
-      // TODO FLIPOFF
-      /* 0x4F */
-      void 0,
-      // TODO DEBUG
-      /* 0x50 */
-      LT,
-      /* 0x51 */
-      LTEQ,
-      /* 0x52 */
-      GT,
-      /* 0x53 */
-      GTEQ,
-      /* 0x54 */
-      EQ,
-      /* 0x55 */
-      NEQ,
-      /* 0x56 */
-      ODD,
-      /* 0x57 */
-      EVEN,
-      /* 0x58 */
-      IF,
-      /* 0x59 */
-      EIF,
-      /* 0x5A */
-      AND,
-      /* 0x5B */
-      OR,
-      /* 0x5C */
-      NOT,
-      /* 0x5D */
-      DELTAP123.bind(void 0, 1),
-      /* 0x5E */
-      SDB,
-      /* 0x5F */
-      SDS,
-      /* 0x60 */
-      ADD,
-      /* 0x61 */
-      SUB,
-      /* 0x62 */
-      DIV,
-      /* 0x63 */
-      MUL,
-      /* 0x64 */
-      ABS,
-      /* 0x65 */
-      NEG,
-      /* 0x66 */
-      FLOOR,
-      /* 0x67 */
-      CEILING,
-      /* 0x68 */
-      ROUND.bind(void 0, 0),
-      /* 0x69 */
-      ROUND.bind(void 0, 1),
-      /* 0x6A */
-      ROUND.bind(void 0, 2),
-      /* 0x6B */
-      ROUND.bind(void 0, 3),
-      /* 0x6C */
-      void 0,
-      // TODO NROUND[ab]
-      /* 0x6D */
-      void 0,
-      // TODO NROUND[ab]
-      /* 0x6E */
-      void 0,
-      // TODO NROUND[ab]
-      /* 0x6F */
-      void 0,
-      // TODO NROUND[ab]
-      /* 0x70 */
-      WCVTF,
-      /* 0x71 */
-      DELTAP123.bind(void 0, 2),
-      /* 0x72 */
-      DELTAP123.bind(void 0, 3),
-      /* 0x73 */
-      DELTAC123.bind(void 0, 1),
-      /* 0x74 */
-      DELTAC123.bind(void 0, 2),
-      /* 0x75 */
-      DELTAC123.bind(void 0, 3),
-      /* 0x76 */
-      SROUND,
-      /* 0x77 */
-      S45ROUND,
-      /* 0x78 */
-      void 0,
-      // TODO JROT[]
-      /* 0x79 */
-      void 0,
-      // TODO JROF[]
-      /* 0x7A */
-      ROFF,
-      /* 0x7B */
-      void 0,
-      /* 0x7C */
-      RUTG,
-      /* 0x7D */
-      RDTG,
-      /* 0x7E */
-      POP,
-      // actually SANGW, supposed to do only a pop though
-      /* 0x7F */
-      POP,
-      // actually AA, supposed to do only a pop though
-      /* 0x80 */
-      void 0,
-      // TODO FLIPPT
-      /* 0x81 */
-      void 0,
-      // TODO FLIPRGON
-      /* 0x82 */
-      void 0,
-      // TODO FLIPRGOFF
-      /* 0x83 */
-      void 0,
-      /* 0x84 */
-      void 0,
-      /* 0x85 */
-      SCANCTRL,
-      /* 0x86 */
-      SDPVTL.bind(void 0, 0),
-      /* 0x87 */
-      SDPVTL.bind(void 0, 1),
-      /* 0x88 */
-      GETINFO,
-      /* 0x89 */
-      void 0,
-      // TODO IDEF
-      /* 0x8A */
-      ROLL,
-      /* 0x8B */
-      MAX,
-      /* 0x8C */
-      MIN,
-      /* 0x8D */
-      SCANTYPE,
-      /* 0x8E */
-      INSTCTRL,
-      /* 0x8F */
-      void 0,
-      /* 0x90 */
-      void 0,
-      /* 0x91 */
-      void 0,
-      /* 0x92 */
-      void 0,
-      /* 0x93 */
-      void 0,
-      /* 0x94 */
-      void 0,
-      /* 0x95 */
-      void 0,
-      /* 0x96 */
-      void 0,
-      /* 0x97 */
-      void 0,
-      /* 0x98 */
-      void 0,
-      /* 0x99 */
-      void 0,
-      /* 0x9A */
-      void 0,
-      /* 0x9B */
-      void 0,
-      /* 0x9C */
-      void 0,
-      /* 0x9D */
-      void 0,
-      /* 0x9E */
-      void 0,
-      /* 0x9F */
-      void 0,
-      /* 0xA0 */
-      void 0,
-      /* 0xA1 */
-      void 0,
-      /* 0xA2 */
-      void 0,
-      /* 0xA3 */
-      void 0,
-      /* 0xA4 */
-      void 0,
-      /* 0xA5 */
-      void 0,
-      /* 0xA6 */
-      void 0,
-      /* 0xA7 */
-      void 0,
-      /* 0xA8 */
-      void 0,
-      /* 0xA9 */
-      void 0,
-      /* 0xAA */
-      void 0,
-      /* 0xAB */
-      void 0,
-      /* 0xAC */
-      void 0,
-      /* 0xAD */
-      void 0,
-      /* 0xAE */
-      void 0,
-      /* 0xAF */
-      void 0,
-      /* 0xB0 */
-      PUSHB.bind(void 0, 1),
-      /* 0xB1 */
-      PUSHB.bind(void 0, 2),
-      /* 0xB2 */
-      PUSHB.bind(void 0, 3),
-      /* 0xB3 */
-      PUSHB.bind(void 0, 4),
-      /* 0xB4 */
-      PUSHB.bind(void 0, 5),
-      /* 0xB5 */
-      PUSHB.bind(void 0, 6),
-      /* 0xB6 */
-      PUSHB.bind(void 0, 7),
-      /* 0xB7 */
-      PUSHB.bind(void 0, 8),
-      /* 0xB8 */
-      PUSHW.bind(void 0, 1),
-      /* 0xB9 */
-      PUSHW.bind(void 0, 2),
-      /* 0xBA */
-      PUSHW.bind(void 0, 3),
-      /* 0xBB */
-      PUSHW.bind(void 0, 4),
-      /* 0xBC */
-      PUSHW.bind(void 0, 5),
-      /* 0xBD */
-      PUSHW.bind(void 0, 6),
-      /* 0xBE */
-      PUSHW.bind(void 0, 7),
-      /* 0xBF */
-      PUSHW.bind(void 0, 8),
-      /* 0xC0 */
-      MDRP_MIRP.bind(void 0, 0, 0, 0, 0, 0),
-      /* 0xC1 */
-      MDRP_MIRP.bind(void 0, 0, 0, 0, 0, 1),
-      /* 0xC2 */
-      MDRP_MIRP.bind(void 0, 0, 0, 0, 0, 2),
-      /* 0xC3 */
-      MDRP_MIRP.bind(void 0, 0, 0, 0, 0, 3),
-      /* 0xC4 */
-      MDRP_MIRP.bind(void 0, 0, 0, 0, 1, 0),
-      /* 0xC5 */
-      MDRP_MIRP.bind(void 0, 0, 0, 0, 1, 1),
-      /* 0xC6 */
-      MDRP_MIRP.bind(void 0, 0, 0, 0, 1, 2),
-      /* 0xC7 */
-      MDRP_MIRP.bind(void 0, 0, 0, 0, 1, 3),
-      /* 0xC8 */
-      MDRP_MIRP.bind(void 0, 0, 0, 1, 0, 0),
-      /* 0xC9 */
-      MDRP_MIRP.bind(void 0, 0, 0, 1, 0, 1),
-      /* 0xCA */
-      MDRP_MIRP.bind(void 0, 0, 0, 1, 0, 2),
-      /* 0xCB */
-      MDRP_MIRP.bind(void 0, 0, 0, 1, 0, 3),
-      /* 0xCC */
-      MDRP_MIRP.bind(void 0, 0, 0, 1, 1, 0),
-      /* 0xCD */
-      MDRP_MIRP.bind(void 0, 0, 0, 1, 1, 1),
-      /* 0xCE */
-      MDRP_MIRP.bind(void 0, 0, 0, 1, 1, 2),
-      /* 0xCF */
-      MDRP_MIRP.bind(void 0, 0, 0, 1, 1, 3),
-      /* 0xD0 */
-      MDRP_MIRP.bind(void 0, 0, 1, 0, 0, 0),
-      /* 0xD1 */
-      MDRP_MIRP.bind(void 0, 0, 1, 0, 0, 1),
-      /* 0xD2 */
-      MDRP_MIRP.bind(void 0, 0, 1, 0, 0, 2),
-      /* 0xD3 */
-      MDRP_MIRP.bind(void 0, 0, 1, 0, 0, 3),
-      /* 0xD4 */
-      MDRP_MIRP.bind(void 0, 0, 1, 0, 1, 0),
-      /* 0xD5 */
-      MDRP_MIRP.bind(void 0, 0, 1, 0, 1, 1),
-      /* 0xD6 */
-      MDRP_MIRP.bind(void 0, 0, 1, 0, 1, 2),
-      /* 0xD7 */
-      MDRP_MIRP.bind(void 0, 0, 1, 0, 1, 3),
-      /* 0xD8 */
-      MDRP_MIRP.bind(void 0, 0, 1, 1, 0, 0),
-      /* 0xD9 */
-      MDRP_MIRP.bind(void 0, 0, 1, 1, 0, 1),
-      /* 0xDA */
-      MDRP_MIRP.bind(void 0, 0, 1, 1, 0, 2),
-      /* 0xDB */
-      MDRP_MIRP.bind(void 0, 0, 1, 1, 0, 3),
-      /* 0xDC */
-      MDRP_MIRP.bind(void 0, 0, 1, 1, 1, 0),
-      /* 0xDD */
-      MDRP_MIRP.bind(void 0, 0, 1, 1, 1, 1),
-      /* 0xDE */
-      MDRP_MIRP.bind(void 0, 0, 1, 1, 1, 2),
-      /* 0xDF */
-      MDRP_MIRP.bind(void 0, 0, 1, 1, 1, 3),
-      /* 0xE0 */
-      MDRP_MIRP.bind(void 0, 1, 0, 0, 0, 0),
-      /* 0xE1 */
-      MDRP_MIRP.bind(void 0, 1, 0, 0, 0, 1),
-      /* 0xE2 */
-      MDRP_MIRP.bind(void 0, 1, 0, 0, 0, 2),
-      /* 0xE3 */
-      MDRP_MIRP.bind(void 0, 1, 0, 0, 0, 3),
-      /* 0xE4 */
-      MDRP_MIRP.bind(void 0, 1, 0, 0, 1, 0),
-      /* 0xE5 */
-      MDRP_MIRP.bind(void 0, 1, 0, 0, 1, 1),
-      /* 0xE6 */
-      MDRP_MIRP.bind(void 0, 1, 0, 0, 1, 2),
-      /* 0xE7 */
-      MDRP_MIRP.bind(void 0, 1, 0, 0, 1, 3),
-      /* 0xE8 */
-      MDRP_MIRP.bind(void 0, 1, 0, 1, 0, 0),
-      /* 0xE9 */
-      MDRP_MIRP.bind(void 0, 1, 0, 1, 0, 1),
-      /* 0xEA */
-      MDRP_MIRP.bind(void 0, 1, 0, 1, 0, 2),
-      /* 0xEB */
-      MDRP_MIRP.bind(void 0, 1, 0, 1, 0, 3),
-      /* 0xEC */
-      MDRP_MIRP.bind(void 0, 1, 0, 1, 1, 0),
-      /* 0xED */
-      MDRP_MIRP.bind(void 0, 1, 0, 1, 1, 1),
-      /* 0xEE */
-      MDRP_MIRP.bind(void 0, 1, 0, 1, 1, 2),
-      /* 0xEF */
-      MDRP_MIRP.bind(void 0, 1, 0, 1, 1, 3),
-      /* 0xF0 */
-      MDRP_MIRP.bind(void 0, 1, 1, 0, 0, 0),
-      /* 0xF1 */
-      MDRP_MIRP.bind(void 0, 1, 1, 0, 0, 1),
-      /* 0xF2 */
-      MDRP_MIRP.bind(void 0, 1, 1, 0, 0, 2),
-      /* 0xF3 */
-      MDRP_MIRP.bind(void 0, 1, 1, 0, 0, 3),
-      /* 0xF4 */
-      MDRP_MIRP.bind(void 0, 1, 1, 0, 1, 0),
-      /* 0xF5 */
-      MDRP_MIRP.bind(void 0, 1, 1, 0, 1, 1),
-      /* 0xF6 */
-      MDRP_MIRP.bind(void 0, 1, 1, 0, 1, 2),
-      /* 0xF7 */
-      MDRP_MIRP.bind(void 0, 1, 1, 0, 1, 3),
-      /* 0xF8 */
-      MDRP_MIRP.bind(void 0, 1, 1, 1, 0, 0),
-      /* 0xF9 */
-      MDRP_MIRP.bind(void 0, 1, 1, 1, 0, 1),
-      /* 0xFA */
-      MDRP_MIRP.bind(void 0, 1, 1, 1, 0, 2),
-      /* 0xFB */
-      MDRP_MIRP.bind(void 0, 1, 1, 1, 0, 3),
-      /* 0xFC */
-      MDRP_MIRP.bind(void 0, 1, 1, 1, 1, 0),
-      /* 0xFD */
-      MDRP_MIRP.bind(void 0, 1, 1, 1, 1, 1),
-      /* 0xFE */
-      MDRP_MIRP.bind(void 0, 1, 1, 1, 1, 2),
-      /* 0xFF */
-      MDRP_MIRP.bind(void 0, 1, 1, 1, 1, 3)
-    ];
-    Token.prototype.setState = function(key, value) {
-      this.state[key] = value;
-      this.activeState = { key, value: this.state[key] };
-      return this.activeState;
-    };
-    Token.prototype.getState = function(stateId) {
-      return this.state[stateId] || null;
-    };
-    Tokenizer.prototype.inboundIndex = function(index) {
-      return index >= 0 && index < this.tokens.length;
-    };
-    Tokenizer.prototype.composeRUD = function(RUDs) {
-      var this$1 = this;
-      var silent = true;
-      var state = RUDs.map(function(RUD) {
-        return this$1[RUD[0]].apply(this$1, RUD.slice(1).concat(silent));
-      });
-      var hasFAILObject = function(obj) {
-        return typeof obj === "object" && obj.hasOwnProperty("FAIL");
-      };
-      if (state.every(hasFAILObject)) {
-        return {
-          FAIL: "composeRUD: one or more operations hasn't completed successfully",
-          report: state.filter(hasFAILObject)
-        };
-      }
-      this.dispatch("composeRUD", [state.filter(function(op) {
-        return !hasFAILObject(op);
-      })]);
-    };
-    Tokenizer.prototype.replaceRange = function(startIndex, offset, tokens, silent) {
-      offset = offset !== null ? offset : this.tokens.length;
-      var isTokenType = tokens.every(function(token) {
-        return token instanceof Token;
-      });
-      if (!isNaN(startIndex) && this.inboundIndex(startIndex) && isTokenType) {
-        var replaced = this.tokens.splice.apply(
-          this.tokens,
-          [startIndex, offset].concat(tokens)
-        );
-        if (!silent) {
-          this.dispatch("replaceToken", [startIndex, offset, tokens]);
-        }
-        return [replaced, tokens];
-      } else {
-        return { FAIL: "replaceRange: invalid tokens or startIndex." };
-      }
-    };
-    Tokenizer.prototype.replaceToken = function(index, token, silent) {
-      if (!isNaN(index) && this.inboundIndex(index) && token instanceof Token) {
-        var replaced = this.tokens.splice(index, 1, token);
-        if (!silent) {
-          this.dispatch("replaceToken", [index, token]);
-        }
-        return [replaced[0], token];
-      } else {
-        return { FAIL: "replaceToken: invalid token or index." };
-      }
-    };
-    Tokenizer.prototype.removeRange = function(startIndex, offset, silent) {
-      offset = !isNaN(offset) ? offset : this.tokens.length;
-      var tokens = this.tokens.splice(startIndex, offset);
-      if (!silent) {
-        this.dispatch("removeRange", [tokens, startIndex, offset]);
-      }
-      return tokens;
-    };
-    Tokenizer.prototype.removeToken = function(index, silent) {
-      if (!isNaN(index) && this.inboundIndex(index)) {
-        var token = this.tokens.splice(index, 1);
-        if (!silent) {
-          this.dispatch("removeToken", [token, index]);
-        }
-        return token;
-      } else {
-        return { FAIL: "removeToken: invalid token index." };
-      }
-    };
-    Tokenizer.prototype.insertToken = function(tokens, index, silent) {
-      var tokenType = tokens.every(
-        function(token) {
-          return token instanceof Token;
-        }
-      );
-      if (tokenType) {
-        this.tokens.splice.apply(
-          this.tokens,
-          [index, 0].concat(tokens)
-        );
-        if (!silent) {
-          this.dispatch("insertToken", [tokens, index]);
-        }
-        return tokens;
-      } else {
-        return { FAIL: "insertToken: invalid token(s)." };
-      }
-    };
-    Tokenizer.prototype.registerModifier = function(modifierId, condition, modifier) {
-      this.events.newToken.subscribe(function(token, contextParams) {
-        var conditionParams = [token, contextParams];
-        var canApplyModifier = condition === null || condition.apply(this, conditionParams) === true;
-        var modifierParams = [token, contextParams];
-        if (canApplyModifier) {
-          var newStateValue = modifier.apply(this, modifierParams);
-          token.setState(modifierId, newStateValue);
-        }
-      });
-      this.registeredModifiers.push(modifierId);
-    };
-    Event.prototype.subscribe = function(eventHandler) {
-      if (typeof eventHandler === "function") {
-        return this.subscribers.push(eventHandler) - 1;
-      } else {
-        return { FAIL: "invalid '" + this.eventId + "' event handler" };
-      }
-    };
-    Event.prototype.unsubscribe = function(subsId) {
-      this.subscribers.splice(subsId, 1);
-    };
-    ContextParams.prototype.setCurrentIndex = function(index) {
-      this.index = index;
-      this.current = this.context[index];
-      this.backtrack = this.context.slice(0, index);
-      this.lookahead = this.context.slice(index + 1);
-    };
-    ContextParams.prototype.get = function(offset) {
-      switch (true) {
-        case offset === 0:
-          return this.current;
-        case (offset < 0 && Math.abs(offset) <= this.backtrack.length):
-          return this.backtrack.slice(offset)[0];
-        case (offset > 0 && offset <= this.lookahead.length):
-          return this.lookahead[offset - 1];
-        default:
-          return null;
-      }
-    };
-    Tokenizer.prototype.rangeToText = function(range) {
-      if (range instanceof ContextRange) {
-        return this.getRangeTokens(range).map(function(token) {
-          return token.char;
-        }).join("");
-      }
-    };
-    Tokenizer.prototype.getText = function() {
-      return this.tokens.map(function(token) {
-        return token.char;
-      }).join("");
-    };
-    Tokenizer.prototype.getContext = function(contextName) {
-      var context = this.registeredContexts[contextName];
-      return !!context ? context : null;
-    };
-    Tokenizer.prototype.on = function(eventName, eventHandler) {
-      var event = this.events[eventName];
-      if (!!event) {
-        return event.subscribe(eventHandler);
-      } else {
-        return null;
-      }
-    };
-    Tokenizer.prototype.dispatch = function(eventName, args) {
-      var this$1 = this;
-      var event = this.events[eventName];
-      if (event instanceof Event) {
-        event.subscribers.forEach(function(subscriber) {
-          subscriber.apply(this$1, args || []);
-        });
-      }
-    };
-    Tokenizer.prototype.registerContextChecker = function(contextName, contextStartCheck, contextEndCheck) {
-      if (!!this.getContext(contextName)) {
-        return {
-          FAIL: "context name '" + contextName + "' is already registered."
-        };
-      }
-      if (typeof contextStartCheck !== "function") {
-        return {
-          FAIL: "missing context start check."
-        };
-      }
-      if (typeof contextEndCheck !== "function") {
-        return {
-          FAIL: "missing context end check."
-        };
-      }
-      var contextCheckers = new ContextChecker(
-        contextName,
-        contextStartCheck,
-        contextEndCheck
-      );
-      this.registeredContexts[contextName] = contextCheckers;
-      this.contextCheckers.push(contextCheckers);
-      return contextCheckers;
-    };
-    Tokenizer.prototype.getRangeTokens = function(range) {
-      var endIndex = range.startIndex + range.endOffset;
-      return [].concat(
-        this.tokens.slice(range.startIndex, endIndex)
-      );
-    };
-    Tokenizer.prototype.getContextRanges = function(contextName) {
-      var context = this.getContext(contextName);
-      if (!!context) {
-        return context.ranges;
-      } else {
-        return { FAIL: "context checker '" + contextName + "' is not registered." };
-      }
-    };
-    Tokenizer.prototype.resetContextsRanges = function() {
-      var registeredContexts = this.registeredContexts;
-      for (var contextName in registeredContexts) {
-        if (registeredContexts.hasOwnProperty(contextName)) {
-          var context = registeredContexts[contextName];
-          context.ranges = [];
-        }
-      }
-    };
-    Tokenizer.prototype.updateContextsRanges = function() {
-      this.resetContextsRanges();
-      var chars = this.tokens.map(function(token) {
-        return token.char;
-      });
-      for (var i = 0; i < chars.length; i++) {
-        var contextParams = new ContextParams(chars, i);
-        this.runContextCheck(contextParams);
-      }
-      this.dispatch("updateContextsRanges", [this.registeredContexts]);
-    };
-    Tokenizer.prototype.setEndOffset = function(offset, contextName) {
-      var startIndex = this.getContext(contextName).openRange.startIndex;
-      var range = new ContextRange(startIndex, offset, contextName);
-      var ranges = this.getContext(contextName).ranges;
-      range.rangeId = contextName + "." + ranges.length;
-      ranges.push(range);
-      this.getContext(contextName).openRange = null;
-      return range;
-    };
-    Tokenizer.prototype.runContextCheck = function(contextParams) {
-      var this$1 = this;
-      var index = contextParams.index;
-      this.contextCheckers.forEach(function(contextChecker) {
-        var contextName = contextChecker.contextName;
-        var openRange = this$1.getContext(contextName).openRange;
-        if (!openRange && contextChecker.checkStart(contextParams)) {
-          openRange = new ContextRange(index, null, contextName);
-          this$1.getContext(contextName).openRange = openRange;
-          this$1.dispatch("contextStart", [contextName, index]);
-        }
-        if (!!openRange && contextChecker.checkEnd(contextParams)) {
-          var offset = index - openRange.startIndex + 1;
-          var range = this$1.setEndOffset(offset, contextName);
-          this$1.dispatch("contextEnd", [contextName, range]);
-        }
-      });
-    };
-    Tokenizer.prototype.tokenize = function(text) {
-      this.tokens = [];
-      this.resetContextsRanges();
-      var chars = Array.from(text);
-      this.dispatch("start");
-      for (var i = 0; i < chars.length; i++) {
-        var char = chars[i];
-        var contextParams = new ContextParams(chars, i);
-        this.dispatch("next", [contextParams]);
-        this.runContextCheck(contextParams);
-        var token = new Token(char);
-        this.tokens.push(token);
-        this.dispatch("newToken", [token, contextParams]);
-      }
-      this.dispatch("end", [this.tokens]);
-      return this.tokens;
-    };
-    FeatureQuery.prototype.getDefaultScriptFeaturesIndexes = function() {
-      var scripts = this.font.tables.gsub.scripts;
-      for (var s = 0; s < scripts.length; s++) {
-        var script = scripts[s];
-        if (script.tag === "DFLT") {
-          return script.script.defaultLangSys.featureIndexes;
-        }
-      }
-      return [];
-    };
-    FeatureQuery.prototype.getScriptFeaturesIndexes = function(scriptTag) {
-      var tables = this.font.tables;
-      if (!tables.gsub) {
-        return [];
-      }
-      if (!scriptTag) {
-        return this.getDefaultScriptFeaturesIndexes();
-      }
-      var scripts = this.font.tables.gsub.scripts;
-      for (var i = 0; i < scripts.length; i++) {
-        var script = scripts[i];
-        if (script.tag === scriptTag && script.script.defaultLangSys) {
-          return script.script.defaultLangSys.featureIndexes;
-        } else {
-          var langSysRecords = script.langSysRecords;
-          if (!!langSysRecords) {
-            for (var j = 0; j < langSysRecords.length; j++) {
-              var langSysRecord = langSysRecords[j];
-              if (langSysRecord.tag === scriptTag) {
-                var langSys = langSysRecord.langSys;
-                return langSys.featureIndexes;
-              }
-            }
-          }
-        }
-      }
-      return this.getDefaultScriptFeaturesIndexes();
-    };
-    FeatureQuery.prototype.mapTagsToFeatures = function(features, scriptTag) {
-      var tags = {};
-      for (var i = 0; i < features.length; i++) {
-        var tag = features[i].tag;
-        var feature = features[i].feature;
-        tags[tag] = feature;
-      }
-      this.features[scriptTag].tags = tags;
-    };
-    FeatureQuery.prototype.getScriptFeatures = function(scriptTag) {
-      var features = this.features[scriptTag];
-      if (this.features.hasOwnProperty(scriptTag)) {
-        return features;
-      }
-      var featuresIndexes = this.getScriptFeaturesIndexes(scriptTag);
-      if (!featuresIndexes) {
-        return null;
-      }
-      var gsub2 = this.font.tables.gsub;
-      features = featuresIndexes.map(function(index) {
-        return gsub2.features[index];
-      });
-      this.features[scriptTag] = features;
-      this.mapTagsToFeatures(features, scriptTag);
-      return features;
-    };
-    FeatureQuery.prototype.getSubstitutionType = function(lookupTable, subtable) {
-      var lookupType = lookupTable.lookupType.toString();
-      var substFormat = subtable.substFormat.toString();
-      return lookupType + substFormat;
-    };
-    FeatureQuery.prototype.getLookupMethod = function(lookupTable, subtable) {
-      var this$1 = this;
-      var substitutionType = this.getSubstitutionType(lookupTable, subtable);
-      switch (substitutionType) {
-        case "11":
-          return function(glyphIndex) {
-            return singleSubstitutionFormat1.apply(
-              this$1,
-              [glyphIndex, subtable]
-            );
-          };
-        case "12":
-          return function(glyphIndex) {
-            return singleSubstitutionFormat2.apply(
-              this$1,
-              [glyphIndex, subtable]
-            );
-          };
-        case "63":
-          return function(contextParams) {
-            return chainingSubstitutionFormat3.apply(
-              this$1,
-              [contextParams, subtable]
-            );
-          };
-        case "41":
-          return function(contextParams) {
-            return ligatureSubstitutionFormat1.apply(
-              this$1,
-              [contextParams, subtable]
-            );
-          };
-        case "21":
-          return function(glyphIndex) {
-            return decompositionSubstitutionFormat1.apply(
-              this$1,
-              [glyphIndex, subtable]
-            );
-          };
-        default:
-          throw new Error(
-            "lookupType: " + lookupTable.lookupType + " - substFormat: " + subtable.substFormat + " is not yet supported"
-          );
-      }
-    };
-    FeatureQuery.prototype.lookupFeature = function(query) {
-      var contextParams = query.contextParams;
-      var currentIndex = contextParams.index;
-      var feature = this.getFeature({
-        tag: query.tag,
-        script: query.script
-      });
-      if (!feature) {
-        return new Error(
-          "font '" + this.font.names.fullName.en + "' doesn't support feature '" + query.tag + "' for script '" + query.script + "'."
-        );
-      }
-      var lookups = this.getFeatureLookups(feature);
-      var substitutions = [].concat(contextParams.context);
-      for (var l = 0; l < lookups.length; l++) {
-        var lookupTable = lookups[l];
-        var subtables = this.getLookupSubtables(lookupTable);
-        for (var s = 0; s < subtables.length; s++) {
-          var subtable = subtables[s];
-          var substType = this.getSubstitutionType(lookupTable, subtable);
-          var lookup = this.getLookupMethod(lookupTable, subtable);
-          var substitution = void 0;
-          switch (substType) {
-            case "11":
-              substitution = lookup(contextParams.current);
-              if (substitution) {
-                substitutions.splice(currentIndex, 1, new SubstitutionAction({
-                  id: 11,
-                  tag: query.tag,
-                  substitution
-                }));
-              }
-              break;
-            case "12":
-              substitution = lookup(contextParams.current);
-              if (substitution) {
-                substitutions.splice(currentIndex, 1, new SubstitutionAction({
-                  id: 12,
-                  tag: query.tag,
-                  substitution
-                }));
-              }
-              break;
-            case "63":
-              substitution = lookup(contextParams);
-              if (Array.isArray(substitution) && substitution.length) {
-                substitutions.splice(currentIndex, 1, new SubstitutionAction({
-                  id: 63,
-                  tag: query.tag,
-                  substitution
-                }));
-              }
-              break;
-            case "41":
-              substitution = lookup(contextParams);
-              if (substitution) {
-                substitutions.splice(currentIndex, 1, new SubstitutionAction({
-                  id: 41,
-                  tag: query.tag,
-                  substitution
-                }));
-              }
-              break;
-            case "21":
-              substitution = lookup(contextParams.current);
-              if (substitution) {
-                substitutions.splice(currentIndex, 1, new SubstitutionAction({
-                  id: 21,
-                  tag: query.tag,
-                  substitution
-                }));
-              }
-              break;
-          }
-          contextParams = new ContextParams(substitutions, currentIndex);
-          if (Array.isArray(substitution) && !substitution.length) {
-            continue;
-          }
-          substitution = null;
-        }
-      }
-      return substitutions.length ? substitutions : null;
-    };
-    FeatureQuery.prototype.supports = function(query) {
-      if (!query.script) {
-        return false;
-      }
-      this.getScriptFeatures(query.script);
-      var supportedScript = this.features.hasOwnProperty(query.script);
-      if (!query.tag) {
-        return supportedScript;
-      }
-      var supportedFeature = this.features[query.script].some(function(feature) {
-        return feature.tag === query.tag;
-      });
-      return supportedScript && supportedFeature;
-    };
-    FeatureQuery.prototype.getLookupSubtables = function(lookupTable) {
-      return lookupTable.subtables || null;
-    };
-    FeatureQuery.prototype.getLookupByIndex = function(index) {
-      var lookups = this.font.tables.gsub.lookups;
-      return lookups[index] || null;
-    };
-    FeatureQuery.prototype.getFeatureLookups = function(feature) {
-      return feature.lookupListIndexes.map(this.getLookupByIndex.bind(this));
-    };
-    FeatureQuery.prototype.getFeature = function getFeature(query) {
-      if (!this.font) {
-        return { FAIL: "No font was found" };
-      }
-      if (!this.features.hasOwnProperty(query.script)) {
-        this.getScriptFeatures(query.script);
-      }
-      var scriptFeatures = this.features[query.script];
-      if (!scriptFeatures) {
-        return { FAIL: "No feature for script " + query.script };
-      }
-      if (!scriptFeatures.tags[query.tag]) {
-        return null;
-      }
-      return this.features[query.script].tags[query.tag];
-    };
-    arabicWordCheck = {
-      startCheck: arabicWordStartCheck,
-      endCheck: arabicWordEndCheck
-    };
-    arabicSentenceCheck = {
-      startCheck: arabicSentenceStartCheck,
-      endCheck: arabicSentenceEndCheck
-    };
-    SUBSTITUTIONS = {
-      11: singleSubstitutionFormat1$1,
-      12: singleSubstitutionFormat2$1,
-      63: chainingSubstitutionFormat3$1,
-      41: ligatureSubstitutionFormat1$1
-    };
-    latinWordCheck = {
-      startCheck: latinWordStartCheck,
-      endCheck: latinWordEndCheck
-    };
-    Bidi.prototype.setText = function(text) {
-      this.text = text;
-    };
-    Bidi.prototype.contextChecks = {
-      latinWordCheck,
-      arabicWordCheck,
-      arabicSentenceCheck
-    };
-    Bidi.prototype.registerFeatures = function(script, tags) {
-      var this$1 = this;
-      var supportedTags = tags.filter(
-        function(tag) {
-          return this$1.query.supports({ script, tag });
-        }
-      );
-      if (!this.featuresTags.hasOwnProperty(script)) {
-        this.featuresTags[script] = supportedTags;
-      } else {
-        this.featuresTags[script] = this.featuresTags[script].concat(supportedTags);
-      }
-    };
-    Bidi.prototype.applyFeatures = function(font, features) {
-      if (!font) {
-        throw new Error(
-          "No valid font was provided to apply features"
-        );
-      }
-      if (!this.query) {
-        this.query = new FeatureQuery(font);
-      }
-      for (var f = 0; f < features.length; f++) {
-        var feature = features[f];
-        if (!this.query.supports({ script: feature.script })) {
-          continue;
-        }
-        this.registerFeatures(feature.script, feature.tags);
-      }
-    };
-    Bidi.prototype.registerModifier = function(modifierId, condition, modifier) {
-      this.tokenizer.registerModifier(modifierId, condition, modifier);
-    };
-    Bidi.prototype.checkContextReady = function(contextId) {
-      return !!this.tokenizer.getContext(contextId);
-    };
-    Bidi.prototype.applyFeaturesToContexts = function() {
-      if (this.checkContextReady("arabicWord")) {
-        applyArabicPresentationForms.call(this);
-        applyArabicRequireLigatures.call(this);
-      }
-      if (this.checkContextReady("latinWord")) {
-        applyLatinLigatures.call(this);
-      }
-      if (this.checkContextReady("arabicSentence")) {
-        reverseArabicSentences.call(this);
-      }
-    };
-    Bidi.prototype.processText = function(text) {
-      if (!this.text || this.text !== text) {
-        this.setText(text);
-        tokenizeText.call(this);
-        this.applyFeaturesToContexts();
-      }
-    };
-    Bidi.prototype.getBidiText = function(text) {
-      this.processText(text);
-      return this.tokenizer.getText();
-    };
-    Bidi.prototype.getTextGlyphs = function(text) {
-      this.processText(text);
-      var indexes = [];
-      for (var i = 0; i < this.tokenizer.tokens.length; i++) {
-        var token = this.tokenizer.tokens[i];
-        if (token.state.deleted) {
-          continue;
-        }
-        var index = token.activeState.value;
-        indexes.push(Array.isArray(index) ? index[0] : index);
-      }
-      return indexes;
-    };
-    Font.prototype.hasChar = function(c) {
-      return this.encoding.charToGlyphIndex(c) !== null;
-    };
-    Font.prototype.charToGlyphIndex = function(s) {
-      return this.encoding.charToGlyphIndex(s);
-    };
-    Font.prototype.charToGlyph = function(c) {
-      var glyphIndex = this.charToGlyphIndex(c);
-      var glyph = this.glyphs.get(glyphIndex);
-      if (!glyph) {
-        glyph = this.glyphs.get(0);
-      }
-      return glyph;
-    };
-    Font.prototype.updateFeatures = function(options) {
-      return this.defaultRenderOptions.features.map(function(feature) {
-        if (feature.script === "latn") {
-          return {
-            script: "latn",
-            tags: feature.tags.filter(function(tag) {
-              return options[tag];
-            })
-          };
-        } else {
-          return feature;
-        }
-      });
-    };
-    Font.prototype.stringToGlyphs = function(s, options) {
-      var this$1 = this;
-      var bidi = new Bidi();
-      var charToGlyphIndexMod = function(token) {
-        return this$1.charToGlyphIndex(token.char);
-      };
-      bidi.registerModifier("glyphIndex", null, charToGlyphIndexMod);
-      var features = options ? this.updateFeatures(options.features) : this.defaultRenderOptions.features;
-      bidi.applyFeatures(this, features);
-      var indexes = bidi.getTextGlyphs(s);
-      var length = indexes.length;
-      var glyphs = new Array(length);
-      var notdef = this.glyphs.get(0);
-      for (var i = 0; i < length; i += 1) {
-        glyphs[i] = this.glyphs.get(indexes[i]) || notdef;
-      }
-      return glyphs;
-    };
-    Font.prototype.nameToGlyphIndex = function(name) {
-      return this.glyphNames.nameToGlyphIndex(name);
-    };
-    Font.prototype.nameToGlyph = function(name) {
-      var glyphIndex = this.nameToGlyphIndex(name);
-      var glyph = this.glyphs.get(glyphIndex);
-      if (!glyph) {
-        glyph = this.glyphs.get(0);
-      }
-      return glyph;
-    };
-    Font.prototype.glyphIndexToName = function(gid) {
-      if (!this.glyphNames.glyphIndexToName) {
-        return "";
-      }
-      return this.glyphNames.glyphIndexToName(gid);
-    };
-    Font.prototype.getKerningValue = function(leftGlyph, rightGlyph) {
-      leftGlyph = leftGlyph.index || leftGlyph;
-      rightGlyph = rightGlyph.index || rightGlyph;
-      var gposKerning = this.position.defaultKerningTables;
-      if (gposKerning) {
-        return this.position.getKerningValue(gposKerning, leftGlyph, rightGlyph);
-      }
-      return this.kerningPairs[leftGlyph + "," + rightGlyph] || 0;
-    };
-    Font.prototype.defaultRenderOptions = {
-      kerning: true,
-      features: [
-        /**
-         * these 4 features are required to render Arabic text properly
-         * and shouldn't be turned off when rendering arabic text.
-         */
-        { script: "arab", tags: ["init", "medi", "fina", "rlig"] },
-        { script: "latn", tags: ["liga", "rlig"] }
-      ]
-    };
-    Font.prototype.forEachGlyph = function(text, x, y, fontSize, options, callback) {
-      x = x !== void 0 ? x : 0;
-      y = y !== void 0 ? y : 0;
-      fontSize = fontSize !== void 0 ? fontSize : 72;
-      options = Object.assign({}, this.defaultRenderOptions, options);
-      var fontScale = 1 / this.unitsPerEm * fontSize;
-      var glyphs = this.stringToGlyphs(text, options);
-      var kerningLookups;
-      if (options.kerning) {
-        var script = options.script || this.position.getDefaultScriptName();
-        kerningLookups = this.position.getKerningTables(script, options.language);
-      }
-      for (var i = 0; i < glyphs.length; i += 1) {
-        var glyph = glyphs[i];
-        callback.call(this, glyph, x, y, fontSize, options);
-        if (glyph.advanceWidth) {
-          x += glyph.advanceWidth * fontScale;
-        }
-        if (options.kerning && i < glyphs.length - 1) {
-          var kerningValue = kerningLookups ? this.position.getKerningValue(kerningLookups, glyph.index, glyphs[i + 1].index) : this.getKerningValue(glyph, glyphs[i + 1]);
-          x += kerningValue * fontScale;
-        }
-        if (options.letterSpacing) {
-          x += options.letterSpacing * fontSize;
-        } else if (options.tracking) {
-          x += options.tracking / 1e3 * fontSize;
-        }
-      }
-      return x;
-    };
-    Font.prototype.getPath = function(text, x, y, fontSize, options) {
-      var fullPath = new Path();
-      this.forEachGlyph(text, x, y, fontSize, options, function(glyph, gX, gY, gFontSize) {
-        var glyphPath = glyph.getPath(gX, gY, gFontSize, options, this);
-        fullPath.extend(glyphPath);
-      });
-      return fullPath;
-    };
-    Font.prototype.getPaths = function(text, x, y, fontSize, options) {
-      var glyphPaths = [];
-      this.forEachGlyph(text, x, y, fontSize, options, function(glyph, gX, gY, gFontSize) {
-        var glyphPath = glyph.getPath(gX, gY, gFontSize, options, this);
-        glyphPaths.push(glyphPath);
-      });
-      return glyphPaths;
-    };
-    Font.prototype.getAdvanceWidth = function(text, fontSize, options) {
-      return this.forEachGlyph(text, 0, 0, fontSize, options, function() {
-      });
-    };
-    Font.prototype.draw = function(ctx, text, x, y, fontSize, options) {
-      this.getPath(text, x, y, fontSize, options).draw(ctx);
-    };
-    Font.prototype.drawPoints = function(ctx, text, x, y, fontSize, options) {
-      this.forEachGlyph(text, x, y, fontSize, options, function(glyph, gX, gY, gFontSize) {
-        glyph.drawPoints(ctx, gX, gY, gFontSize);
-      });
-    };
-    Font.prototype.drawMetrics = function(ctx, text, x, y, fontSize, options) {
-      this.forEachGlyph(text, x, y, fontSize, options, function(glyph, gX, gY, gFontSize) {
-        glyph.drawMetrics(ctx, gX, gY, gFontSize);
-      });
-    };
-    Font.prototype.getEnglishName = function(name) {
-      var translations = this.names[name];
-      if (translations) {
-        return translations.en;
-      }
-    };
-    Font.prototype.validate = function() {
-      var _this = this;
-      function assert(predicate, message) {
-      }
-      function assertNamePresent(name) {
-        var englishName = _this.getEnglishName(name);
-        assert(englishName && englishName.trim().length > 0);
-      }
-      assertNamePresent("fontFamily");
-      assertNamePresent("weightName");
-      assertNamePresent("manufacturer");
-      assertNamePresent("copyright");
-      assertNamePresent("version");
-      assert(this.unitsPerEm > 0);
-    };
-    Font.prototype.toTables = function() {
-      return sfnt.fontToTable(this);
-    };
-    Font.prototype.toBuffer = function() {
-      console.warn("Font.toBuffer is deprecated. Use Font.toArrayBuffer instead.");
-      return this.toArrayBuffer();
-    };
-    Font.prototype.toArrayBuffer = function() {
-      var sfntTable = this.toTables();
-      var bytes = sfntTable.encode();
-      var buffer = new ArrayBuffer(bytes.length);
-      var intArray = new Uint8Array(buffer);
-      for (var i = 0; i < bytes.length; i++) {
-        intArray[i] = bytes[i];
-      }
-      return buffer;
-    };
-    Font.prototype.download = function(fileName) {
-      var familyName = this.getEnglishName("fontFamily");
-      var styleName = this.getEnglishName("fontSubfamily");
-      fileName = fileName || familyName.replace(/\s/g, "") + "-" + styleName + ".otf";
-      var arrayBuffer = this.toArrayBuffer();
-      if (isBrowser()) {
-        window.URL = window.URL || window.webkitURL;
-        if (window.URL) {
-          var dataView = new DataView(arrayBuffer);
-          var blob = new Blob([dataView], { type: "font/opentype" });
-          var link = document.createElement("a");
-          link.href = window.URL.createObjectURL(blob);
-          link.download = fileName;
-          var event = document.createEvent("MouseEvents");
-          event.initEvent("click", true, false);
-          link.dispatchEvent(event);
-        } else {
-          console.warn("Font file could not be downloaded. Try using a different browser.");
-        }
-      } else {
-        var fs = require_fs();
-        var buffer = arrayBufferToNodeBuffer(arrayBuffer);
-        fs.writeFileSync(fileName, buffer);
-      }
-    };
-    Font.prototype.fsSelectionValues = {
-      ITALIC: 1,
-      //1
-      UNDERSCORE: 2,
-      //2
-      NEGATIVE: 4,
-      //4
-      OUTLINED: 8,
-      //8
-      STRIKEOUT: 16,
-      //16
-      BOLD: 32,
-      //32
-      REGULAR: 64,
-      //64
-      USER_TYPO_METRICS: 128,
-      //128
-      WWS: 256,
-      //256
-      OBLIQUE: 512
-      //512
-    };
-    Font.prototype.usWidthClasses = {
-      ULTRA_CONDENSED: 1,
-      EXTRA_CONDENSED: 2,
-      CONDENSED: 3,
-      SEMI_CONDENSED: 4,
-      MEDIUM: 5,
-      SEMI_EXPANDED: 6,
-      EXPANDED: 7,
-      EXTRA_EXPANDED: 8,
-      ULTRA_EXPANDED: 9
-    };
-    Font.prototype.usWeightClasses = {
-      THIN: 100,
-      EXTRA_LIGHT: 200,
-      LIGHT: 300,
-      NORMAL: 400,
-      MEDIUM: 500,
-      SEMI_BOLD: 600,
-      BOLD: 700,
-      EXTRA_BOLD: 800,
-      BLACK: 900
-    };
-    fvar = { make: makeFvarTable, parse: parseFvarTable };
-    attachList = function() {
-      return {
-        coverage: this.parsePointer(Parser.coverage),
-        attachPoints: this.parseList(Parser.pointer(Parser.uShortList))
-      };
-    };
-    caretValue = function() {
-      var format = this.parseUShort();
-      check.argument(
-        format === 1 || format === 2 || format === 3,
-        "Unsupported CaretValue table version."
-      );
-      if (format === 1) {
-        return { coordinate: this.parseShort() };
-      } else if (format === 2) {
-        return { pointindex: this.parseShort() };
-      } else if (format === 3) {
-        return { coordinate: this.parseShort() };
-      }
-    };
-    ligGlyph = function() {
-      return this.parseList(Parser.pointer(caretValue));
-    };
-    ligCaretList = function() {
-      return {
-        coverage: this.parsePointer(Parser.coverage),
-        ligGlyphs: this.parseList(Parser.pointer(ligGlyph))
-      };
-    };
-    markGlyphSets = function() {
-      this.parseUShort();
-      return this.parseList(Parser.pointer(Parser.coverage));
-    };
-    gdef = { parse: parseGDEFTable };
-    subtableParsers$1 = new Array(10);
-    subtableParsers$1[1] = function parseLookup12() {
-      var start = this.offset + this.relativeOffset;
-      var posformat = this.parseUShort();
-      if (posformat === 1) {
-        return {
-          posFormat: 1,
-          coverage: this.parsePointer(Parser.coverage),
-          value: this.parseValueRecord()
-        };
-      } else if (posformat === 2) {
-        return {
-          posFormat: 2,
-          coverage: this.parsePointer(Parser.coverage),
-          values: this.parseValueRecordList()
-        };
-      }
-      check.assert(false, "0x" + start.toString(16) + ": GPOS lookup type 1 format must be 1 or 2.");
-    };
-    subtableParsers$1[2] = function parseLookup22() {
-      var start = this.offset + this.relativeOffset;
-      var posFormat = this.parseUShort();
-      check.assert(posFormat === 1 || posFormat === 2, "0x" + start.toString(16) + ": GPOS lookup type 2 format must be 1 or 2.");
-      var coverage = this.parsePointer(Parser.coverage);
-      var valueFormat1 = this.parseUShort();
-      var valueFormat2 = this.parseUShort();
-      if (posFormat === 1) {
-        return {
-          posFormat,
-          coverage,
-          valueFormat1,
-          valueFormat2,
-          pairSets: this.parseList(Parser.pointer(Parser.list(function() {
-            return {
-              // pairValueRecord
-              secondGlyph: this.parseUShort(),
-              value1: this.parseValueRecord(valueFormat1),
-              value2: this.parseValueRecord(valueFormat2)
-            };
-          })))
-        };
-      } else if (posFormat === 2) {
-        var classDef1 = this.parsePointer(Parser.classDef);
-        var classDef2 = this.parsePointer(Parser.classDef);
-        var class1Count = this.parseUShort();
-        var class2Count = this.parseUShort();
-        return {
-          // Class Pair Adjustment
-          posFormat,
-          coverage,
-          valueFormat1,
-          valueFormat2,
-          classDef1,
-          classDef2,
-          class1Count,
-          class2Count,
-          classRecords: this.parseList(class1Count, Parser.list(class2Count, function() {
-            return {
-              value1: this.parseValueRecord(valueFormat1),
-              value2: this.parseValueRecord(valueFormat2)
-            };
-          }))
-        };
-      }
-    };
-    subtableParsers$1[3] = function parseLookup32() {
-      return { error: "GPOS Lookup 3 not supported" };
-    };
-    subtableParsers$1[4] = function parseLookup42() {
-      return { error: "GPOS Lookup 4 not supported" };
-    };
-    subtableParsers$1[5] = function parseLookup52() {
-      return { error: "GPOS Lookup 5 not supported" };
-    };
-    subtableParsers$1[6] = function parseLookup62() {
-      return { error: "GPOS Lookup 6 not supported" };
-    };
-    subtableParsers$1[7] = function parseLookup72() {
-      return { error: "GPOS Lookup 7 not supported" };
-    };
-    subtableParsers$1[8] = function parseLookup82() {
-      return { error: "GPOS Lookup 8 not supported" };
-    };
-    subtableParsers$1[9] = function parseLookup9() {
-      return { error: "GPOS Lookup 9 not supported" };
-    };
-    subtableMakers$1 = new Array(10);
-    gpos = { parse: parseGposTable, make: makeGposTable };
-    kern = { parse: parseKernTable };
-    loca = { parse: parseLocaTable };
-  }
-});
 
 // src/shaders.ts
-var blitShaderCode, shaderCode, seriesLineShaderCode, computeShaderCode, markerComputeShaderCode, markerShaderCode, dashedComputeShaderCode;
-var init_shaders = __esm({
-  "src/shaders.ts"() {
-    "use strict";
-    blitShaderCode = `
+var blitShaderCode = `
 struct VSOut {
     @builtin(position) pos: vec4f,
     @location(0) uv: vec2f,
@@ -12274,7 +12267,7 @@ fn fsMain(in: VSOut) -> @location(0) vec4f {
     return textureSample(tex, samp, in.uv);
 }
 `;
-    shaderCode = `
+var shaderCode = `
 struct DataStruct {
     @builtin(position) pos: vec4f,
     @location(0) colors: vec3f,
@@ -12291,7 +12284,7 @@ fn fragmentMain(fragData: DataStruct) -> @location(0) vec4f {
     return vec4f(fragData.colors, 1.0);
 }
 `;
-    seriesLineShaderCode = `
+var seriesLineShaderCode = `
 struct SeriesVOut {
     @builtin(position) pos: vec4f,
     @location(0) color: vec4f,
@@ -12306,7 +12299,7 @@ struct SeriesVOut {
     return v.color;
 }
 `;
-    computeShaderCode = `
+var computeShaderCode = `
 struct SeriesParams {
     xMin:      f32, xMax:      f32, yMin:      f32, yMax:      f32,  // 0
     plotX0:    f32, plotX1:    f32, plotY0:    f32, plotY1:    f32,  // 16
@@ -12384,7 +12377,7 @@ fn csMain(@builtin(global_invocation_id) gid: vec3u) {
     out[base+30u] = p3x; out[base+31u] = p3y; out[base+32u] = r; out[base+33u] = g; out[base+34u] = b; out[base+35u] = a;
 }
 `;
-    markerComputeShaderCode = `
+var markerComputeShaderCode = `
 struct MarkerParams {
     xMin:      f32, xMax:      f32, yMin:     f32, yMax:     f32,   //  0
     plotX0:    f32, plotX1:    f32, plotY0:   f32, plotY1:   f32,   // 16
@@ -12399,9 +12392,9 @@ struct MarkerParams {
 @group(0) @binding(1) var<storage, read>       pts: array<f32>;    // x0,y0,x1,y1,...
 @group(0) @binding(2) var<storage, read_write> out: array<f32>;    // 6 verts * 15 floats / marker
 
-export const VERTS: u32 = 6u;
-export const FPV:   u32 = 15u;   // floats per vertex
-export const FPM:   u32 = 90u;   // floats per marker = VERTS * FPV
+const VERTS: u32 = 6u;
+const FPV:   u32 = 15u;   // floats per vertex
+const FPM:   u32 = 90u;   // floats per marker = VERTS * FPV
 
 @compute @workgroup_size(64)
 fn csMarker(@builtin(global_invocation_id) gid: vec3u) {
@@ -12438,15 +12431,23 @@ fn csMarker(@builtin(global_invocation_id) gid: vec3u) {
     let outerS = mp.outerR * mp.ssaa;
     let innerS = mp.innerR * mp.ssaa;   // negative means hollow
 
-    // Bounding quad corners in clip space
-    let qx0 = (cx - mp.outerR) / hw - 1.0;
-    let qx1 = (cx + mp.outerR) / hw - 1.0;
-    let qy0 = 1.0 - (cy - mp.outerR) / hh;
-    let qy1 = 1.0 - (cy + mp.outerR) / hh;
+    // Bounding quad: extend by edge-band half-width so the full edge ring is rasterised.
+    // The edge band spans [outerS-ew, outerS+ew]; without padding the outer half is clipped.
+    let ewCss = mp.outerR - abs(mp.innerR);   // edge half-width in CSS pixels
+    let qr    = mp.outerR + ewCss;            // bounding-box half-size in CSS pixels
+    let qx0 = (cx - qr) / hw - 1.0;
+    let qx1 = (cx + qr) / hw - 1.0;
+    let qy0 = 1.0 - (cy - qr) / hh;
+    let qy1 = 1.0 - (cy + qr) / hh;
 
     let fr = mp.faceR; let fg = mp.faceG; let fb = mp.faceB; let fa = mp.faceA;
     let er = mp.edgeR; let eg = mp.edgeG; let eb = mp.edgeB;
     let sid = f32(mp.shapeId);
+
+    // Per-vertex offset from marker centre in SSAA pixels (used as SDF input in fragment shader)
+    let QR = qr * mp.ssaa;
+    var lx = array<f32, 6>(-QR, -QR, QR,  -QR, QR, QR);
+    var ly = array<f32, 6>(-QR,  QR, QR,  -QR, QR, -QR);
 
     // Quad corners: TL, BL, BR,  TL, BR, TR
     var px = array<f32, 6>(qx0, qx0, qx1,  qx0, qx1, qx1);
@@ -12455,7 +12456,7 @@ fn csMarker(@builtin(global_invocation_id) gid: vec3u) {
     for (var v = 0u; v < VERTS; v++) {
         let vb = base + v * FPV;
         out[vb]      = px[v]; out[vb+1u]  = py[v];    // clip pos
-        out[vb+2u]   = cxS;   out[vb+3u]  = cyS;      // centre (ssaa px)
+        out[vb+2u]   = lx[v]; out[vb+3u]  = ly[v];    // local offset from centre (ssaa px)
         out[vb+4u]   = outerS; out[vb+5u] = innerS;   // radii (ssaa px)
         out[vb+6u]   = fr;    out[vb+7u]  = fg;        // face rgba
         out[vb+8u]   = fb;    out[vb+9u]  = fa;
@@ -12465,10 +12466,10 @@ fn csMarker(@builtin(global_invocation_id) gid: vec3u) {
     }
 }
 `;
-    markerShaderCode = `
+var markerShaderCode = `
 struct VSIn {
     @location(0) clipPos:  vec2f,
-    @location(1) center:   vec2f,   // SSAA fb pixels
+    @location(1) localPos: vec2f,   // offset from marker centre in SSAA pixels
     @location(2) radii:    vec2f,   // (outerR, innerR) SSAA pixels; innerR<0 \u2192 hollow
     @location(3) faceCol:  vec4f,   // rgba
     @location(4) edgeCol:  vec4f,   // rgba
@@ -12476,7 +12477,7 @@ struct VSIn {
 }
 struct VSOut {
     @builtin(position) pos: vec4f,
-    @location(0) center:    vec2f,
+    @location(0) localPos:  vec2f,
     @location(1) radii:     vec2f,
     @location(2) faceCol:   vec4f,
     @location(3) edgeCol:   vec4f,
@@ -12484,12 +12485,12 @@ struct VSOut {
 }
 @vertex fn vsMarker(v: VSIn) -> VSOut {
     var o: VSOut;
-    o.pos     = vec4f(v.clipPos, 0.0, 1.0);
-    o.center  = v.center;
-    o.radii   = v.radii;
-    o.faceCol = v.faceCol;
-    o.edgeCol = v.edgeCol;
-    o.shapeId = v.shapeId;
+    o.pos      = vec4f(v.clipPos, 0.0, 1.0);
+    o.localPos = v.localPos;
+    o.radii    = v.radii;
+    o.faceCol  = v.faceCol;
+    o.edgeCol  = v.edgeCol;
+    o.shapeId  = v.shapeId;
     return o;
 }
 
@@ -12577,7 +12578,7 @@ fn sdfX(p: vec2f, r: f32, ew: f32) -> f32 {
     let innerR  = in.radii.y;           // negative \u2192 hollow
     let hollow  = innerR < 0.0;
     let ew      = outerR - abs(innerR); // edge half-width
-    let p       = in.pos.xy - in.center;
+    let p       = in.localPos;          // offset from marker centre in SSAA pixels
     let sid     = u32(in.shapeId + 0.5);
 
     var d: f32;
@@ -12647,7 +12648,7 @@ fn sdfX(p: vec2f, r: f32, ew: f32) -> f32 {
     }
 }
 `;
-    dashedComputeShaderCode = `
+var dashedComputeShaderCode = `
 struct DashedParams {
     xMin:    f32, xMax:    f32, yMin:    f32, yMax:    f32,  //  0
     plotX0:  f32, plotX1:  f32, plotY0:  f32, plotY1:  f32,  // 16
@@ -12773,8 +12774,6 @@ fn csDashed() {
     drawArgs[3] = 0u;
 }
 `;
-  }
-});
 
 // node_modules/earcut/src/earcut.js
 function earcut(data, holeIndices, dim = 2) {
@@ -13196,10 +13195,6 @@ function signedArea(data, start, end, dim) {
   }
   return sum;
 }
-var init_earcut = __esm({
-  "node_modules/earcut/src/earcut.js"() {
-  }
-});
 
 // src/font-utils.ts
 function textWidthClip(text, font, fontSize, canvasWidth) {
@@ -13327,13 +13322,6 @@ function textToTriVerts(text, font, penClipX, baselineClipY, fontSize, canvasWid
   }
   return verts;
 }
-var init_font_utils = __esm({
-  "src/font-utils.ts"() {
-    "use strict";
-    init_opentype_module();
-    init_earcut();
-  }
-});
 
 // src/ticks.ts
 function niceNum(range, round) {
@@ -13448,6 +13436,8 @@ function dateTicksFromStep(minMs, maxMs, step) {
   }
   return ticks;
 }
+var _PAD2 = (n) => n.toString().padStart(2, "0");
+var _MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 function formatDateTick(ms, step) {
   const d = new Date(ms);
   const SEC = 1e3, MIN2 = 60 * SEC, HOUR = 60 * MIN2, DAY = 24 * HOUR;
@@ -13459,14 +13449,6 @@ function formatDateTick(ms, step) {
   if (step < YEAR) return `${_MONTH_ABBR[d.getMonth()]} ${d.getFullYear()}`;
   return String(d.getFullYear());
 }
-var _PAD2, _MONTH_ABBR;
-var init_ticks = __esm({
-  "src/ticks.ts"() {
-    "use strict";
-    _PAD2 = (n) => n.toString().padStart(2, "0");
-    _MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  }
-});
 
 // src/gpu-utils.ts
 async function enumerateAdapters() {
@@ -13491,13 +13473,63 @@ async function enumerateAdapters() {
   }
   return options;
 }
-var init_gpu_utils = __esm({
-  "src/gpu-utils.ts"() {
-    "use strict";
-  }
-});
 
 // src/styles.ts
+var GridStyle = class {
+  /** Show grid lines. Default: true */
+  show = true;
+  /** Grid line color [r, g, b], each in [0, 1]. Default: white [1, 1, 1] (ggplot2 style) */
+  color = [1, 1, 1];
+  /** Grid line width in CSS pixels. Default: 1 */
+  lineWidth = 1;
+};
+var BackgroundStyle = class {
+  /** Plot panel fill color [r, g, b]. Default: ggplot2 grey92 ≈ [0.922, 0.922, 0.922] */
+  panelColor = [0.922, 0.922, 0.922];
+  /** Canvas/figure background color [r, g, b]. Default: white [1, 1, 1] */
+  figureColor = [1, 1, 1];
+};
+var MarkerStyle = class {
+  /** Marker shape. Default: 'o' (circle). */
+  shape = "o";
+  /** Marker diameter in CSS pixels. Default: 6 */
+  size = 6;
+  /**
+   * Fill color [r, g, b] for the marker interior.
+   * Default: null — no fill (hollow marker, MATLAB default).
+   * Set to a color to fill the interior, e.g. [1, 1, 1] for white.
+   */
+  faceColor = null;
+  /**
+   * Edge (border) color [r, g, b] or [r, g, b, a].
+   * Default: null — inherits the series line color and alpha.
+   */
+  edgeColor = null;
+  /** Edge (border) line width in CSS pixels. Default: 1 */
+  edgeWidth = 1;
+};
+var PlotStyle = class {
+  /** Grid line appearance. */
+  grid = new GridStyle();
+  /** Background colors. */
+  background = new BackgroundStyle();
+  /** Color for axis lines, ticks, and tick labels [r, g, b]. Default: ggplot2 grey30 */
+  axisColor = [0.302, 0.302, 0.302];
+  /**
+   * Direction of axis ticks relative to the plot panel.
+   * - 'in'   — ticks point inward into the panel (default)
+   * - 'out'  — ticks point outward beyond the axes border (MATLAB style)
+   * - 'both' — ticks extend both inward and outward
+   */
+  tickDirection = "in";
+  /**
+   * Aspect ratio constraint for the plot panel.
+   * - 'auto'  — panel fills all available space (default)
+   * - 'equal' — one data unit on X equals one data unit on Y in screen pixels;
+   *             the panel is centered and the excess dimension is cropped.
+   */
+  aspectRatio = "auto";
+};
 function matlabStyle() {
   const s = new PlotStyle();
   s.background.panelColor = [1, 1, 1];
@@ -13509,1032 +13541,959 @@ function matlabStyle() {
   s.tickDirection = "in";
   return s;
 }
-var GridStyle, BackgroundStyle, MarkerStyle, PlotStyle;
-var init_styles = __esm({
-  "src/styles.ts"() {
-    "use strict";
-    GridStyle = class {
-      /** Show grid lines. Default: true */
-      show = true;
-      /** Grid line color [r, g, b], each in [0, 1]. Default: white [1, 1, 1] (ggplot2 style) */
-      color = [1, 1, 1];
-      /** Grid line width in CSS pixels. Default: 1 */
-      lineWidth = 1;
-    };
-    BackgroundStyle = class {
-      /** Plot panel fill color [r, g, b]. Default: ggplot2 grey92 ≈ [0.922, 0.922, 0.922] */
-      panelColor = [0.922, 0.922, 0.922];
-      /** Canvas/figure background color [r, g, b]. Default: white [1, 1, 1] */
-      figureColor = [1, 1, 1];
-    };
-    MarkerStyle = class {
-      /** Marker shape. Default: 'o' (circle). */
-      shape = "o";
-      /** Marker diameter in CSS pixels. Default: 6 */
-      size = 6;
-      /**
-       * Fill color [r, g, b] for the marker interior.
-       * Default: null — no fill (hollow marker, MATLAB default).
-       * Set to a color to fill the interior, e.g. [1, 1, 1] for white.
-       */
-      faceColor = null;
-      /**
-       * Edge (border) color [r, g, b] or [r, g, b, a].
-       * Default: null — inherits the series line color and alpha.
-       */
-      edgeColor = null;
-      /** Edge (border) line width in CSS pixels. Default: 1 */
-      edgeWidth = 1;
-    };
-    PlotStyle = class {
-      /** Grid line appearance. */
-      grid = new GridStyle();
-      /** Background colors. */
-      background = new BackgroundStyle();
-      /** Color for axis lines, ticks, and tick labels [r, g, b]. Default: ggplot2 grey30 */
-      axisColor = [0.302, 0.302, 0.302];
-      /**
-       * Direction of axis ticks relative to the plot panel.
-       * - 'in'   — ticks point inward into the panel (default)
-       * - 'out'  — ticks point outward beyond the axes border (MATLAB style)
-       * - 'both' — ticks extend both inward and outward
-       */
-      tickDirection = "in";
-      /**
-       * Aspect ratio constraint for the plot panel.
-       * - 'auto'  — panel fills all available space (default)
-       * - 'equal' — one data unit on X equals one data unit on Y in screen pixels;
-       *             the panel is centered and the excess dimension is cropped.
-       */
-      aspectRatio = "auto";
-    };
-  }
-});
 
 // src/plotter.ts
-var DASH_PATTERNS, Figure, Plotter;
-var init_plotter = __esm({
-  "src/plotter.ts"() {
-    "use strict";
-    init_opentype_module();
-    init_shaders();
-    init_font_utils();
-    init_ticks();
-    init_gpu_utils();
-    init_styles();
-    init_styles();
-    init_gpu_utils();
-    DASH_PATTERNS = {
-      "-": [],
-      "--": [8, 8],
-      ":": [2, 4],
-      "-.": [8, 4, 4, 6]
+var DASH_PATTERNS = {
+  "-": [],
+  "--": [8, 8],
+  ":": [2, 4],
+  "-.": [8, 4, 4, 6]
+};
+var Figure = class {
+  // DOM
+  windowEl;
+  canvas;
+  zoomRectEl;
+  titleLabelEl;
+  gpuSelectEl;
+  btnZoomRegion;
+  btnInspect;
+  tooltipEl;
+  crosshairVEl;
+  crosshairHEl;
+  // Config
+  opts;
+  figureOpts;
+  seriesList = [];
+  internalSeries = [];
+  xLabels = null;
+  yLabels = null;
+  xIsDate = false;
+  yIsDate = false;
+  // GPU
+  device;
+  context;
+  canvasFormat;
+  linePipeline;
+  textPipeline;
+  titlePipeline;
+  seriesLinePipeline;
+  // series lines/dashed: triangle-list + alpha blend
+  blitPipeline;
+  blitSampler;
+  computePipeline;
+  adapterOptions = [];
+  // Per-series GPU buffers for compute path (solid lines only).
+  // Allocated once in uploadSeriesGpuBuffers(); reused across frames.
+  //   seriesRawBufs[i]   — raw x/y float32 pairs, STORAGE (uploaded once, shared with marker compute)
+  //   seriesOutBufs[i]   — quad verts output, STORAGE | VERTEX (MAX_SEGS * 36 * 4 bytes)
+  //   seriesParamBufs[i] — 80-byte SeriesParams uniform, updated per frame via writeBuffer
+  //   seriesOutCounts[i] — vertex count to draw this frame (numDispatched * 6)
+  MAX_COMPUTE_SEGS = 5e4;
+  seriesRawBufs = [];
+  seriesOutBufs = [];
+  seriesParamBufs = [];
+  seriesOutCounts = [];
+  // Per-series GPU buffers for marker compute path.
+  //   markerOutBufs[i]   — SDF quad verts, STORAGE | VERTEX (MAX_MARKERS * 6 * 15 * 4 bytes)
+  //   markerParamBufs[i] — 112-byte MarkerParams uniform, updated per frame
+  //   markerOutCounts[i] — vertex count to draw (numMarkers * 6)
+  // Only allocated for series that have a marker; null otherwise.
+  MAX_MARKER_COUNT = 5e4;
+  markerComputePipeline;
+  markerRenderPipeline;
+  markerOutBufs = [];
+  markerParamBufs = [];
+  markerOutCounts = [];
+  // Per-series GPU buffers for dashed-line compute path.
+  //   dashedOutBufs[i]      — output quads, STORAGE | VERTEX (MAX_DASHED_OUT_QUADS * 36 * 4 bytes)
+  //   dashedParamBufs[i]    — 128-byte DashedParams uniform, updated per frame
+  //   dashedDrawArgsBufs[i] — 16-byte indirect draw args, written by compute shader
+  //   dashedNumSegs[i]      — number of segments dispatched this frame
+  // Only allocated for series that have a non-empty dash pattern; null otherwise.
+  MAX_DASHED_OUT_QUADS = 2e5;
+  dashedComputePipeline;
+  dashedOutBufs = [];
+  dashedParamBufs = [];
+  dashedDrawArgsBufs = [];
+  dashedNumSegs = [];
+  // Font
+  font;
+  // View state
+  viewXMin = 0;
+  viewXMax = 1;
+  viewYMin = 0;
+  viewYMax = 1;
+  defaultViewXMin = 0;
+  defaultViewXMax = 1;
+  defaultViewYMin = 0;
+  defaultViewYMax = 1;
+  // Minimum spacing between adjacent data points in data-space coordinates.
+  // Used as the hard zoom-in limit so you can never zoom between two points.
+  minDataSpanX = 0;
+  minDataSpanY = 0;
+  // Interaction state
+  plotMode = "pan";
+  isDragging = false;
+  dragStartX = 0;
+  dragStartY = 0;
+  dragViewXMin = 0;
+  dragViewXMax = 0;
+  dragViewYMin = 0;
+  dragViewYMax = 0;
+  zbDragging = false;
+  zbStartClientX = 0;
+  zbStartClientY = 0;
+  // Cached plot rect in clip space (updated on render)
+  plotRectX0 = -0.75;
+  plotRectY0 = -0.78;
+  plotRectX1 = 0.9;
+  plotRectY1 = 0.78;
+  // Cached tick steps — only recomputed when the view span (zoom) changes, not on pan
+  xTickStep = 1;
+  yTickStep = 1;
+  lastXSpan = -1;
+  lastYSpan = -1;
+  ssaaScale = 2;
+  rafPending = false;
+  constructor(opts, figOpts) {
+    this.opts = opts;
+    this.figureOpts = figOpts;
+    this.windowEl = document.createElement("div");
+    this.windowEl.className = "plot_window";
+    const header = document.createElement("div");
+    header.className = "plot_header";
+    this.titleLabelEl = document.createElement("span");
+    this.titleLabelEl.className = "plot_title_label";
+    this.titleLabelEl.textContent = figOpts.title;
+    const toolbar = document.createElement("div");
+    toolbar.className = "plot_toolbar";
+    const mkBtn = (id, title, inner) => {
+      const b = document.createElement("button");
+      b.className = "plot-btn";
+      b.id = id;
+      b.title = title;
+      b.innerHTML = inner;
+      return b;
     };
-    Figure = class {
-      // DOM
-      windowEl;
-      canvas;
-      zoomRectEl;
-      titleLabelEl;
-      gpuSelectEl;
-      btnZoomRegion;
-      btnInspect;
-      tooltipEl;
-      crosshairVEl;
-      crosshairHEl;
-      // Config
-      opts;
-      figureOpts;
-      seriesList = [];
-      internalSeries = [];
-      xLabels = null;
-      yLabels = null;
-      xIsDate = false;
-      yIsDate = false;
-      // GPU
-      device;
-      context;
-      canvasFormat;
-      linePipeline;
-      textPipeline;
-      titlePipeline;
-      seriesLinePipeline;
-      // series lines/dashed: triangle-list + alpha blend
-      blitPipeline;
-      blitSampler;
-      computePipeline;
-      adapterOptions = [];
-      // Per-series GPU buffers for compute path (solid lines only).
-      // Allocated once in uploadSeriesGpuBuffers(); reused across frames.
-      //   seriesRawBufs[i]   — raw x/y float32 pairs, STORAGE (uploaded once, shared with marker compute)
-      //   seriesOutBufs[i]   — quad verts output, STORAGE | VERTEX (MAX_SEGS * 36 * 4 bytes)
-      //   seriesParamBufs[i] — 80-byte SeriesParams uniform, updated per frame via writeBuffer
-      //   seriesOutCounts[i] — vertex count to draw this frame (numDispatched * 6)
-      MAX_COMPUTE_SEGS = 5e4;
-      seriesRawBufs = [];
-      seriesOutBufs = [];
-      seriesParamBufs = [];
-      seriesOutCounts = [];
-      // Per-series GPU buffers for marker compute path.
-      //   markerOutBufs[i]   — SDF quad verts, STORAGE | VERTEX (MAX_MARKERS * 6 * 15 * 4 bytes)
-      //   markerParamBufs[i] — 112-byte MarkerParams uniform, updated per frame
-      //   markerOutCounts[i] — vertex count to draw (numMarkers * 6)
-      // Only allocated for series that have a marker; null otherwise.
-      MAX_MARKER_COUNT = 5e4;
-      markerComputePipeline;
-      markerRenderPipeline;
-      markerOutBufs = [];
-      markerParamBufs = [];
-      markerOutCounts = [];
-      // Per-series GPU buffers for dashed-line compute path.
-      //   dashedOutBufs[i]      — output quads, STORAGE | VERTEX (MAX_DASHED_OUT_QUADS * 36 * 4 bytes)
-      //   dashedParamBufs[i]    — 128-byte DashedParams uniform, updated per frame
-      //   dashedDrawArgsBufs[i] — 16-byte indirect draw args, written by compute shader
-      //   dashedNumSegs[i]      — number of segments dispatched this frame
-      // Only allocated for series that have a non-empty dash pattern; null otherwise.
-      MAX_DASHED_OUT_QUADS = 2e5;
-      dashedComputePipeline;
-      dashedOutBufs = [];
-      dashedParamBufs = [];
-      dashedDrawArgsBufs = [];
-      dashedNumSegs = [];
-      // Font
-      font;
-      // View state
-      viewXMin = 0;
-      viewXMax = 1;
-      viewYMin = 0;
-      viewYMax = 1;
-      defaultViewXMin = 0;
-      defaultViewXMax = 1;
-      defaultViewYMin = 0;
-      defaultViewYMax = 1;
-      // Minimum spacing between adjacent data points in data-space coordinates.
-      // Used as the hard zoom-in limit so you can never zoom between two points.
-      minDataSpanX = 0;
-      minDataSpanY = 0;
-      // Interaction state
-      plotMode = "pan";
-      isDragging = false;
-      dragStartX = 0;
-      dragStartY = 0;
-      dragViewXMin = 0;
-      dragViewXMax = 0;
-      dragViewYMin = 0;
-      dragViewYMax = 0;
-      zbDragging = false;
-      zbStartClientX = 0;
-      zbStartClientY = 0;
-      // Cached plot rect in clip space (updated on render)
-      plotRectX0 = -0.75;
-      plotRectY0 = -0.78;
-      plotRectX1 = 0.9;
-      plotRectY1 = 0.78;
-      // Cached tick steps — only recomputed when the view span (zoom) changes, not on pan
-      xTickStep = 1;
-      yTickStep = 1;
-      lastXSpan = -1;
-      lastYSpan = -1;
-      ssaaScale = 2;
-      rafPending = false;
-      constructor(opts, figOpts) {
-        this.opts = opts;
-        this.figureOpts = figOpts;
-        this.windowEl = document.createElement("div");
-        this.windowEl.className = "plot_window";
-        const header = document.createElement("div");
-        header.className = "plot_header";
-        this.titleLabelEl = document.createElement("span");
-        this.titleLabelEl.className = "plot_title_label";
-        this.titleLabelEl.textContent = figOpts.title;
-        const toolbar = document.createElement("div");
-        toolbar.className = "plot_toolbar";
-        const mkBtn = (id, title, inner) => {
-          const b = document.createElement("button");
-          b.className = "plot-btn";
-          b.id = id;
-          b.title = title;
-          b.innerHTML = inner;
-          return b;
-        };
-        const btnZoomIn = mkBtn("", "Zoom In", "+");
-        const btnZoomOut = mkBtn("", "Zoom Out", "&#8722;");
-        this.btnZoomRegion = mkBtn(
-          "",
-          "Zoom Region",
-          `<svg viewBox="0 0 18 18" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+    const btnZoomIn = mkBtn("", "Zoom In", "+");
+    const btnZoomOut = mkBtn("", "Zoom Out", "&#8722;");
+    this.btnZoomRegion = mkBtn(
+      "",
+      "Zoom Region",
+      `<svg viewBox="0 0 18 18" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="1" y="1" width="12" height="12" stroke-dasharray="3 2"/>
                 <line x1="11" y1="11" x2="17" y2="17"/>
                 <line x1="14" y1="17" x2="17" y2="17"/><line x1="17" y1="14" x2="17" y2="17"/>
             </svg>`
-        );
-        const btnHome = mkBtn("", "Reset View", "&#8962;");
-        this.btnInspect = mkBtn(
-          "",
-          "Inspect Values",
-          `<svg viewBox="0 0 18 18" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8">
+    );
+    const btnHome = mkBtn("", "Reset View", "&#8962;");
+    this.btnInspect = mkBtn(
+      "",
+      "Inspect Values",
+      `<svg viewBox="0 0 18 18" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8">
                 <circle cx="9" cy="9" r="4"/>
                 <line x1="9" y1="1" x2="9" y2="5"/><line x1="9" y1="13" x2="9" y2="17"/>
                 <line x1="1" y1="9" x2="5" y2="9"/><line x1="13" y1="9" x2="17" y2="9"/>
             </svg>`
-        );
-        this.gpuSelectEl = document.createElement("select");
-        this.gpuSelectEl.title = "GPU Adapter";
-        this.gpuSelectEl.style.cssText = "height:30px;border:1px solid #bbb;border-radius:5px;background:#fff;font-size:12px;padding:0 6px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.18);max-width:200px;";
-        const saveWrapper = document.createElement("div");
-        saveWrapper.style.cssText = "position:relative;display:inline-flex;";
-        const btnSave = mkBtn(
-          "",
-          "Save as Image",
-          `<svg viewBox="0 0 18 18" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+    );
+    this.gpuSelectEl = document.createElement("select");
+    this.gpuSelectEl.title = "GPU Adapter";
+    this.gpuSelectEl.style.cssText = "height:30px;border:1px solid #bbb;border-radius:5px;background:#fff;font-size:12px;padding:0 6px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.18);max-width:200px;";
+    const saveWrapper = document.createElement("div");
+    saveWrapper.style.cssText = "position:relative;display:inline-flex;";
+    const btnSave = mkBtn(
+      "",
+      "Save as Image",
+      `<svg viewBox="0 0 18 18" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="9" y1="2" x2="9" y2="12"/>
                 <polyline points="5,8 9,13 13,8"/>
                 <line x1="2" y1="16" x2="16" y2="16"/>
             </svg>`
-        );
-        const saveMenu = document.createElement("div");
-        saveMenu.style.cssText = "display:none;position:absolute;top:calc(100% + 3px);right:0;z-index:200;background:#fff;border:1px solid #bbb;border-radius:5px;box-shadow:0 3px 10px rgba(0,0,0,0.25);overflow:hidden;white-space:nowrap;";
-        ["PNG", "JPEG", "PDF"].forEach((fmt) => {
-          const item = document.createElement("button");
-          item.textContent = fmt;
-          item.style.cssText = "display:block;width:100%;padding:7px 18px;background:none;border:none;border-bottom:1px solid #eee;text-align:left;cursor:pointer;font-size:13px;font-family:sans-serif;color:#333;";
-          item.addEventListener("mouseover", () => {
-            item.style.background = "#f0f4ff";
-          });
-          item.addEventListener("mouseout", () => {
-            item.style.background = "";
-          });
-          item.addEventListener("click", (e) => {
-            e.stopPropagation();
-            saveMenu.style.display = "none";
-            void this.saveAs(fmt.toLowerCase());
-          });
-          saveMenu.appendChild(item);
-        });
-        saveMenu.lastElementChild.style.borderBottom = "none";
-        saveWrapper.append(btnSave, saveMenu);
-        btnSave.addEventListener("click", (e) => {
-          e.stopPropagation();
-          saveMenu.style.display = saveMenu.style.display === "none" ? "block" : "none";
-        });
-        window.addEventListener("click", () => {
-          saveMenu.style.display = "none";
-        });
-        toolbar.append(btnZoomIn, btnZoomOut, this.btnZoomRegion, btnHome, this.btnInspect, saveWrapper, this.gpuSelectEl);
-        header.append(this.titleLabelEl, toolbar);
-        const canvasContainer = document.createElement("div");
-        canvasContainer.className = "canvas_container";
-        this.canvas = document.createElement("canvas");
-        this.canvas.style.cssText = "display:block;width:100%;height:100%;";
-        this.zoomRectEl = document.createElement("div");
-        this.zoomRectEl.className = "zoom_rect";
-        this.crosshairVEl = document.createElement("div");
-        this.crosshairVEl.style.cssText = "position:absolute;pointer-events:none;top:0;bottom:0;width:1px;background:rgba(0,0,0,0.4);display:none;transform:translateX(-0.5px);";
-        this.crosshairHEl = document.createElement("div");
-        this.crosshairHEl.style.cssText = "position:absolute;pointer-events:none;left:0;right:0;height:1px;background:rgba(0,0,0,0.4);display:none;transform:translateY(-0.5px);";
-        this.tooltipEl = document.createElement("div");
-        this.tooltipEl.style.cssText = "position:absolute;pointer-events:none;background:rgba(20,20,20,0.85);color:#fff;font-size:12px;font-family:monospace;padding:5px 9px;border-radius:5px;white-space:pre;display:none;z-index:10;line-height:1.6;box-shadow:0 2px 8px rgba(0,0,0,0.3);";
-        canvasContainer.append(this.canvas, this.zoomRectEl, this.crosshairVEl, this.crosshairHEl, this.tooltipEl);
-        this.windowEl.append(header, canvasContainer);
-        btnZoomIn.addEventListener("click", () => {
-          const cx = (this.viewXMin + this.viewXMax) / 2;
-          const cy = (this.viewYMin + this.viewYMax) / 2;
-          this.zoomAround(cx, cy, 1 / 1.5);
+    );
+    const saveMenu = document.createElement("div");
+    saveMenu.style.cssText = "display:none;position:absolute;top:calc(100% + 3px);right:0;z-index:200;background:#fff;border:1px solid #bbb;border-radius:5px;box-shadow:0 3px 10px rgba(0,0,0,0.25);overflow:hidden;white-space:nowrap;";
+    ["PNG", "JPEG", "PDF"].forEach((fmt) => {
+      const item = document.createElement("button");
+      item.textContent = fmt;
+      item.style.cssText = "display:block;width:100%;padding:7px 18px;background:none;border:none;border-bottom:1px solid #eee;text-align:left;cursor:pointer;font-size:13px;font-family:sans-serif;color:#333;";
+      item.addEventListener("mouseover", () => {
+        item.style.background = "#f0f4ff";
+      });
+      item.addEventListener("mouseout", () => {
+        item.style.background = "";
+      });
+      item.addEventListener("click", (e) => {
+        e.stopPropagation();
+        saveMenu.style.display = "none";
+        void this.saveAs(fmt.toLowerCase());
+      });
+      saveMenu.appendChild(item);
+    });
+    saveMenu.lastElementChild.style.borderBottom = "none";
+    saveWrapper.append(btnSave, saveMenu);
+    btnSave.addEventListener("click", (e) => {
+      e.stopPropagation();
+      saveMenu.style.display = saveMenu.style.display === "none" ? "block" : "none";
+    });
+    window.addEventListener("click", () => {
+      saveMenu.style.display = "none";
+    });
+    toolbar.append(btnZoomIn, btnZoomOut, this.btnZoomRegion, btnHome, this.btnInspect, saveWrapper, this.gpuSelectEl);
+    header.append(this.titleLabelEl, toolbar);
+    const canvasContainer = document.createElement("div");
+    canvasContainer.className = "canvas_container";
+    this.canvas = document.createElement("canvas");
+    this.canvas.style.cssText = "display:block;width:100%;height:100%;";
+    this.zoomRectEl = document.createElement("div");
+    this.zoomRectEl.className = "zoom_rect";
+    this.crosshairVEl = document.createElement("div");
+    this.crosshairVEl.style.cssText = "position:absolute;pointer-events:none;top:0;bottom:0;width:1px;background:rgba(0,0,0,0.4);display:none;transform:translateX(-0.5px);";
+    this.crosshairHEl = document.createElement("div");
+    this.crosshairHEl.style.cssText = "position:absolute;pointer-events:none;left:0;right:0;height:1px;background:rgba(0,0,0,0.4);display:none;transform:translateY(-0.5px);";
+    this.tooltipEl = document.createElement("div");
+    this.tooltipEl.style.cssText = "position:absolute;pointer-events:none;background:rgba(20,20,20,0.85);color:#fff;font-size:12px;font-family:monospace;padding:5px 9px;border-radius:5px;white-space:pre;display:none;z-index:10;line-height:1.6;box-shadow:0 2px 8px rgba(0,0,0,0.3);";
+    canvasContainer.append(this.canvas, this.zoomRectEl, this.crosshairVEl, this.crosshairHEl, this.tooltipEl);
+    this.windowEl.append(header, canvasContainer);
+    btnZoomIn.addEventListener("click", () => {
+      const cx = (this.viewXMin + this.viewXMax) / 2;
+      const cy = (this.viewYMin + this.viewYMax) / 2;
+      this.zoomAround(cx, cy, 1 / 1.5);
+      this.scheduleRender();
+    });
+    btnZoomOut.addEventListener("click", () => {
+      const cx = (this.viewXMin + this.viewXMax) / 2;
+      const cy = (this.viewYMin + this.viewYMax) / 2;
+      this.zoomAround(cx, cy, 1.5);
+      this.scheduleRender();
+    });
+    this.btnZoomRegion.addEventListener("click", () => {
+      this.setMode(this.plotMode === "zoomRegion" ? "pan" : "zoomRegion");
+    });
+    btnHome.addEventListener("click", () => {
+      this.viewXMin = this.defaultViewXMin;
+      this.viewXMax = this.defaultViewXMax;
+      this.viewYMin = this.defaultViewYMin;
+      this.viewYMax = this.defaultViewYMax;
+      this.scheduleRender();
+    });
+    this.btnInspect.addEventListener("click", () => {
+      this.setMode(this.plotMode === "inspect" ? "pan" : "inspect");
+    });
+    this.gpuSelectEl.addEventListener("change", async () => {
+      const idx = parseInt(this.gpuSelectEl.value, 10);
+      const opt = this.adapterOptions[idx];
+      if (!opt) return;
+      await this.initGPUResources(opt.powerPreference);
+      this.render();
+    });
+    this.canvas.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const factor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
+      const data = this.clientToData(e.clientX, e.clientY);
+      this.zoomAround(data.x, data.y, factor);
+      this.scheduleRender();
+    }, { passive: false });
+    this.canvas.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      if (this.plotMode === "zoomRegion") {
+        this.zbDragging = true;
+        this.zbStartClientX = e.clientX;
+        this.zbStartClientY = e.clientY;
+        const cr = this.canvas.getBoundingClientRect();
+        const x = e.clientX - cr.left;
+        const y = e.clientY - cr.top;
+        this.zoomRectEl.style.left = x + "px";
+        this.zoomRectEl.style.top = y + "px";
+        this.zoomRectEl.style.width = "0px";
+        this.zoomRectEl.style.height = "0px";
+        this.zoomRectEl.style.display = "block";
+      } else if (this.plotMode === "pan") {
+        this.isDragging = true;
+        this.dragStartX = e.clientX;
+        this.dragStartY = e.clientY;
+        this.dragViewXMin = this.viewXMin;
+        this.dragViewXMax = this.viewXMax;
+        this.dragViewYMin = this.viewYMin;
+        this.dragViewYMax = this.viewYMax;
+        this.canvas.style.cursor = "grabbing";
+      }
+    });
+    window.addEventListener("mousemove", (e) => {
+      if (this.zbDragging) {
+        const cr = this.canvas.getBoundingClientRect();
+        const x0 = this.zbStartClientX - cr.left;
+        const y0 = this.zbStartClientY - cr.top;
+        const x1 = e.clientX - cr.left;
+        const y1 = e.clientY - cr.top;
+        this.zoomRectEl.style.left = Math.min(x0, x1) + "px";
+        this.zoomRectEl.style.top = Math.min(y0, y1) + "px";
+        this.zoomRectEl.style.width = Math.abs(x1 - x0) + "px";
+        this.zoomRectEl.style.height = Math.abs(y1 - y0) + "px";
+        return;
+      }
+      if (this.plotMode === "inspect") {
+        this.updateInspector(e.clientX, e.clientY);
+        return;
+      }
+      if (!this.isDragging) return;
+      const rect = this.canvas.getBoundingClientRect();
+      const dxClip = (e.clientX - this.dragStartX) / rect.width * 2;
+      const dyClip = -(e.clientY - this.dragStartY) / rect.height * 2;
+      const dxData = dxClip / (this.plotRectX1 - this.plotRectX0) * (this.dragViewXMax - this.dragViewXMin);
+      const dyData = dyClip / (this.plotRectY1 - this.plotRectY0) * (this.dragViewYMax - this.dragViewYMin);
+      this.viewXMin = this.dragViewXMin - dxData;
+      this.viewXMax = this.dragViewXMax - dxData;
+      this.viewYMin = this.dragViewYMin - dyData;
+      this.viewYMax = this.dragViewYMax - dyData;
+      this.scheduleRender();
+    });
+    window.addEventListener("mouseup", (e) => {
+      if (this.zbDragging) {
+        this.zbDragging = false;
+        this.zoomRectEl.style.display = "none";
+        const x0 = this.zbStartClientX, y0 = this.zbStartClientY;
+        const x1 = e.clientX, y1 = e.clientY;
+        if (Math.abs(x1 - x0) > 5 && Math.abs(y1 - y0) > 5) {
+          const topLeft = this.clientToData(Math.min(x0, x1), Math.min(y0, y1));
+          const bottomRight = this.clientToData(Math.max(x0, x1), Math.max(y0, y1));
+          this.viewXMin = topLeft.x;
+          this.viewXMax = bottomRight.x;
+          this.viewYMin = bottomRight.y;
+          this.viewYMax = topLeft.y;
           this.scheduleRender();
-        });
-        btnZoomOut.addEventListener("click", () => {
-          const cx = (this.viewXMin + this.viewXMax) / 2;
-          const cy = (this.viewYMin + this.viewYMax) / 2;
-          this.zoomAround(cx, cy, 1.5);
-          this.scheduleRender();
-        });
-        this.btnZoomRegion.addEventListener("click", () => {
-          this.setMode(this.plotMode === "zoomRegion" ? "pan" : "zoomRegion");
-        });
-        btnHome.addEventListener("click", () => {
-          this.viewXMin = this.defaultViewXMin;
-          this.viewXMax = this.defaultViewXMax;
-          this.viewYMin = this.defaultViewYMin;
-          this.viewYMax = this.defaultViewYMax;
-          this.scheduleRender();
-        });
-        this.btnInspect.addEventListener("click", () => {
-          this.setMode(this.plotMode === "inspect" ? "pan" : "inspect");
-        });
-        this.gpuSelectEl.addEventListener("change", async () => {
-          const idx = parseInt(this.gpuSelectEl.value, 10);
-          const opt = this.adapterOptions[idx];
-          if (!opt) return;
-          await this.initGPUResources(opt.powerPreference);
-          this.render();
-        });
-        this.canvas.addEventListener("wheel", (e) => {
-          e.preventDefault();
-          const factor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
-          const data = this.clientToData(e.clientX, e.clientY);
-          this.zoomAround(data.x, data.y, factor);
-          this.scheduleRender();
-        }, { passive: false });
-        this.canvas.addEventListener("mousedown", (e) => {
-          e.preventDefault();
-          if (this.plotMode === "zoomRegion") {
-            this.zbDragging = true;
-            this.zbStartClientX = e.clientX;
-            this.zbStartClientY = e.clientY;
-            const cr = this.canvas.getBoundingClientRect();
-            const x = e.clientX - cr.left;
-            const y = e.clientY - cr.top;
-            this.zoomRectEl.style.left = x + "px";
-            this.zoomRectEl.style.top = y + "px";
-            this.zoomRectEl.style.width = "0px";
-            this.zoomRectEl.style.height = "0px";
-            this.zoomRectEl.style.display = "block";
-          } else if (this.plotMode === "pan") {
-            this.isDragging = true;
-            this.dragStartX = e.clientX;
-            this.dragStartY = e.clientY;
-            this.dragViewXMin = this.viewXMin;
-            this.dragViewXMax = this.viewXMax;
-            this.dragViewYMin = this.viewYMin;
-            this.dragViewYMax = this.viewYMax;
-            this.canvas.style.cursor = "grabbing";
-          }
-        });
-        window.addEventListener("mousemove", (e) => {
-          if (this.zbDragging) {
-            const cr = this.canvas.getBoundingClientRect();
-            const x0 = this.zbStartClientX - cr.left;
-            const y0 = this.zbStartClientY - cr.top;
-            const x1 = e.clientX - cr.left;
-            const y1 = e.clientY - cr.top;
-            this.zoomRectEl.style.left = Math.min(x0, x1) + "px";
-            this.zoomRectEl.style.top = Math.min(y0, y1) + "px";
-            this.zoomRectEl.style.width = Math.abs(x1 - x0) + "px";
-            this.zoomRectEl.style.height = Math.abs(y1 - y0) + "px";
-            return;
-          }
-          if (this.plotMode === "inspect") {
-            this.updateInspector(e.clientX, e.clientY);
-            return;
-          }
-          if (!this.isDragging) return;
-          const rect = this.canvas.getBoundingClientRect();
-          const dxClip = (e.clientX - this.dragStartX) / rect.width * 2;
-          const dyClip = -(e.clientY - this.dragStartY) / rect.height * 2;
-          const dxData = dxClip / (this.plotRectX1 - this.plotRectX0) * (this.dragViewXMax - this.dragViewXMin);
-          const dyData = dyClip / (this.plotRectY1 - this.plotRectY0) * (this.dragViewYMax - this.dragViewYMin);
-          this.viewXMin = this.dragViewXMin - dxData;
-          this.viewXMax = this.dragViewXMax - dxData;
-          this.viewYMin = this.dragViewYMin - dyData;
-          this.viewYMax = this.dragViewYMax - dyData;
-          this.scheduleRender();
-        });
-        window.addEventListener("mouseup", (e) => {
-          if (this.zbDragging) {
-            this.zbDragging = false;
-            this.zoomRectEl.style.display = "none";
-            const x0 = this.zbStartClientX, y0 = this.zbStartClientY;
-            const x1 = e.clientX, y1 = e.clientY;
-            if (Math.abs(x1 - x0) > 5 && Math.abs(y1 - y0) > 5) {
-              const topLeft = this.clientToData(Math.min(x0, x1), Math.min(y0, y1));
-              const bottomRight = this.clientToData(Math.max(x0, x1), Math.max(y0, y1));
-              this.viewXMin = topLeft.x;
-              this.viewXMax = bottomRight.x;
-              this.viewYMin = bottomRight.y;
-              this.viewYMax = topLeft.y;
-              this.scheduleRender();
-            }
-            return;
-          }
-          if (this.isDragging) {
-            this.isDragging = false;
-            this.canvas.style.cursor = "grab";
-          }
-        });
-        this.canvas.addEventListener("mouseleave", () => {
-          this.crosshairVEl.style.display = "none";
-          this.crosshairHEl.style.display = "none";
-          this.tooltipEl.style.display = "none";
-        });
+        }
+        return;
+      }
+      if (this.isDragging) {
+        this.isDragging = false;
         this.canvas.style.cursor = "grab";
-        const ro = new ResizeObserver(() => this.render());
-        ro.observe(canvasContainer);
       }
-      // ---- GPU initialisation ----
-      async init(font) {
-        this.font = font;
-        if (!navigator.gpu) throw new Error("WebGPU not supported");
-        const contextOrNull = this.canvas.getContext("webgpu");
-        if (!contextOrNull) throw new Error("Could not obtain WebGPU context");
-        this.context = contextOrNull;
-        this.canvasFormat = navigator.gpu.getPreferredCanvasFormat();
-        this.adapterOptions = await enumerateAdapters();
-        for (let i = 0; i < this.adapterOptions.length; i++) {
-          const el = document.createElement("option");
-          el.value = String(i);
-          el.textContent = this.adapterOptions[i].label;
-          this.gpuSelectEl.appendChild(el);
-        }
-        if (this.adapterOptions.length === 0) {
-          const el = document.createElement("option");
-          el.value = "0";
-          el.textContent = "Default GPU";
-          this.gpuSelectEl.appendChild(el);
-        }
-        this.gpuSelectEl.disabled = this.adapterOptions.length <= 1;
-        if (this.adapterOptions.length === 0) throw new Error("No GPUAdapter found");
-        await this.initGPUResources(this.adapterOptions[0].powerPreference);
-      }
-      async initGPUResources(powerPreference) {
-        const oldDevice = this.device;
-        const adapter = await navigator.gpu.requestAdapter(
-          powerPreference !== void 0 ? { powerPreference } : void 0
-        );
-        if (!adapter) throw new Error("No GPUAdapter found");
-        this.device = await adapter.requestDevice({
-          requiredLimits: { maxBufferSize: adapter.limits.maxBufferSize }
-        });
-        if (!this.device) throw new Error("Failed to create a GPUDevice");
-        if (oldDevice) {
-          this.destroySeriesGpuBuffers();
-          await oldDevice.queue.onSubmittedWorkDone();
-          this.context.unconfigure();
-          const oldLost = oldDevice.lost;
-          oldDevice.destroy();
-          await oldLost;
-        }
-        this.context.configure({ device: this.device, format: this.canvasFormat });
-        const shaderModule = this.device.createShaderModule({ code: shaderCode });
-        const vertexBufferLayout = {
-          arrayStride: 20,
-          attributes: [
-            { format: "float32x2", offset: 0, shaderLocation: 0 },
-            { format: "float32x3", offset: 8, shaderLocation: 1 }
-          ]
-        };
-        const makePipeline = (topology) => this.device.createRenderPipeline({
-          layout: "auto",
-          vertex: { module: shaderModule, entryPoint: "vertexMain", buffers: [vertexBufferLayout] },
-          fragment: { module: shaderModule, entryPoint: "fragmentMain", targets: [{ format: this.canvasFormat }] },
-          primitive: { topology }
-        });
-        this.linePipeline = makePipeline("line-list");
-        this.textPipeline = makePipeline("triangle-list");
-        this.titlePipeline = makePipeline("triangle-list");
-        const seriesLineModule = this.device.createShaderModule({ code: seriesLineShaderCode });
-        const seriesLineVertLayout = {
-          arrayStride: 24,
-          // 6 floats × 4 bytes
-          attributes: [
-            { format: "float32x2", offset: 0, shaderLocation: 0 },
-            // coords
-            { format: "float32x4", offset: 8, shaderLocation: 1 }
-            // color rgba
-          ]
-        };
-        this.seriesLinePipeline = this.device.createRenderPipeline({
-          layout: "auto",
-          vertex: { module: seriesLineModule, entryPoint: "vsSeriesLine", buffers: [seriesLineVertLayout] },
-          fragment: {
-            module: seriesLineModule,
-            entryPoint: "fsSeriesLine",
-            targets: [{
-              format: this.canvasFormat,
-              blend: {
-                color: { operation: "add", srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha" },
-                alpha: { operation: "add", srcFactor: "one", dstFactor: "zero" }
-              }
-            }]
-          },
-          primitive: { topology: "triangle-list" }
-        });
-        const blitShaderModule = this.device.createShaderModule({ code: blitShaderCode });
-        this.blitPipeline = this.device.createRenderPipeline({
-          layout: "auto",
-          vertex: { module: blitShaderModule, entryPoint: "vsMain" },
-          fragment: { module: blitShaderModule, entryPoint: "fsMain", targets: [{ format: this.canvasFormat }] },
-          primitive: { topology: "triangle-list" }
-        });
-        this.blitSampler = this.device.createSampler({ magFilter: "linear", minFilter: "linear" });
-        const computeModule = this.device.createShaderModule({ code: computeShaderCode });
-        this.computePipeline = this.device.createComputePipeline({
-          layout: "auto",
-          compute: { module: computeModule, entryPoint: "csMain" }
-        });
-        const markerComputeModule = this.device.createShaderModule({ code: markerComputeShaderCode });
-        this.markerComputePipeline = this.device.createComputePipeline({
-          layout: "auto",
-          compute: { module: markerComputeModule, entryPoint: "csMarker" }
-        });
-        const markerModule = this.device.createShaderModule({ code: markerShaderCode });
-        const markerVertexLayout = {
-          arrayStride: 15 * 4,
-          // 15 floats × 4 bytes
-          attributes: [
-            { shaderLocation: 0, offset: 0, format: "float32x2" },
-            // clipPos
-            { shaderLocation: 1, offset: 8, format: "float32x2" },
-            // center (ssaa px)
-            { shaderLocation: 2, offset: 16, format: "float32x2" },
-            // radii
-            { shaderLocation: 3, offset: 24, format: "float32x4" },
-            // faceColor rgba
-            { shaderLocation: 4, offset: 40, format: "float32x4" },
-            // edgeColor rgba
-            { shaderLocation: 5, offset: 56, format: "float32" }
-            // shapeId
-          ]
-        };
-        this.markerRenderPipeline = this.device.createRenderPipeline({
-          layout: "auto",
-          vertex: { module: markerModule, entryPoint: "vsMarker", buffers: [markerVertexLayout] },
-          fragment: {
-            module: markerModule,
-            entryPoint: "fsMarker",
-            targets: [{
-              format: this.canvasFormat,
-              blend: {
-                color: { operation: "add", srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha" },
-                alpha: { operation: "add", srcFactor: "one", dstFactor: "zero" }
-              }
-            }]
-          },
-          primitive: { topology: "triangle-list" }
-        });
-        const dashedComputeModule = this.device.createShaderModule({ code: dashedComputeShaderCode });
-        this.dashedComputePipeline = this.device.createComputePipeline({
-          layout: "auto",
-          compute: { module: dashedComputeModule, entryPoint: "csDashed" }
-        });
-        if (this.internalSeries.length > 0) {
-          this.uploadSeriesGpuBuffers();
-        }
-      }
-      // ---- Data / view management ----
-      setData(seriesList) {
-        this.seriesList = seriesList;
-        const xSample = seriesList.flatMap((s) => s.x);
-        const ySample = seriesList.flatMap((s) => s.y);
-        const xIsString = xSample.length > 0 && typeof xSample[0] === "string";
-        const xIsDate = xSample.length > 0 && xSample[0] instanceof Date;
-        const yIsString = ySample.length > 0 && typeof ySample[0] === "string";
-        const yIsDate = ySample.length > 0 && ySample[0] instanceof Date;
-        this.xIsDate = xIsDate;
-        this.yIsDate = yIsDate;
-        this.xLabels = xIsString ? [...new Set(xSample)].sort() : null;
-        this.yLabels = yIsString ? [...new Set(ySample)].sort() : null;
-        const xMap = this.xLabels ? new Map(this.xLabels.map((l, i) => [l, i])) : null;
-        const yMap = this.yLabels ? new Map(this.yLabels.map((l, i) => [l, i])) : null;
-        this.internalSeries = seriesList.map((s) => {
-          let xn = xIsString ? s.x.map((v) => xMap.get(v) ?? 0) : xIsDate ? s.x.map((d) => d.getTime()) : s.x;
-          let yn = yIsString ? s.y.map((v) => yMap.get(v) ?? 0) : yIsDate ? s.y.map((d) => d.getTime()) : s.y;
-          if ((xIsString || xIsDate) && xn.length > 1) {
-            const idx = Array.from({ length: xn.length }, (_, i) => i).sort((a, b) => xn[a] - xn[b]);
-            xn = idx.map((i) => xn[i]);
-            yn = idx.map((i) => yn[i]);
+    });
+    this.canvas.addEventListener("mouseleave", () => {
+      this.crosshairVEl.style.display = "none";
+      this.crosshairHEl.style.display = "none";
+      this.tooltipEl.style.display = "none";
+    });
+    this.canvas.style.cursor = "grab";
+    const ro = new ResizeObserver(() => this.render());
+    ro.observe(canvasContainer);
+  }
+  // ---- GPU initialisation ----
+  async init(font) {
+    this.font = font;
+    if (!navigator.gpu) throw new Error("WebGPU not supported");
+    const contextOrNull = this.canvas.getContext("webgpu");
+    if (!contextOrNull) throw new Error("Could not obtain WebGPU context");
+    this.context = contextOrNull;
+    this.canvasFormat = navigator.gpu.getPreferredCanvasFormat();
+    this.adapterOptions = await enumerateAdapters();
+    for (let i = 0; i < this.adapterOptions.length; i++) {
+      const el = document.createElement("option");
+      el.value = String(i);
+      el.textContent = this.adapterOptions[i].label;
+      this.gpuSelectEl.appendChild(el);
+    }
+    if (this.adapterOptions.length === 0) {
+      const el = document.createElement("option");
+      el.value = "0";
+      el.textContent = "Default GPU";
+      this.gpuSelectEl.appendChild(el);
+    }
+    this.gpuSelectEl.disabled = this.adapterOptions.length <= 1;
+    if (this.adapterOptions.length === 0) throw new Error("No GPUAdapter found");
+    await this.initGPUResources(this.adapterOptions[0].powerPreference);
+  }
+  async initGPUResources(powerPreference) {
+    const oldDevice = this.device;
+    const adapter = await navigator.gpu.requestAdapter(
+      powerPreference !== void 0 ? { powerPreference } : void 0
+    );
+    if (!adapter) throw new Error("No GPUAdapter found");
+    this.device = await adapter.requestDevice({
+      requiredLimits: { maxBufferSize: adapter.limits.maxBufferSize }
+    });
+    if (!this.device) throw new Error("Failed to create a GPUDevice");
+    if (oldDevice) {
+      this.destroySeriesGpuBuffers();
+      await oldDevice.queue.onSubmittedWorkDone();
+      this.context.unconfigure();
+      const oldLost = oldDevice.lost;
+      oldDevice.destroy();
+      await oldLost;
+    }
+    this.context.configure({ device: this.device, format: this.canvasFormat });
+    const shaderModule = this.device.createShaderModule({ code: shaderCode });
+    const vertexBufferLayout = {
+      arrayStride: 20,
+      attributes: [
+        { format: "float32x2", offset: 0, shaderLocation: 0 },
+        { format: "float32x3", offset: 8, shaderLocation: 1 }
+      ]
+    };
+    const makePipeline = (topology) => this.device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module: shaderModule, entryPoint: "vertexMain", buffers: [vertexBufferLayout] },
+      fragment: { module: shaderModule, entryPoint: "fragmentMain", targets: [{ format: this.canvasFormat }] },
+      primitive: { topology }
+    });
+    this.linePipeline = makePipeline("line-list");
+    this.textPipeline = makePipeline("triangle-list");
+    this.titlePipeline = makePipeline("triangle-list");
+    const seriesLineModule = this.device.createShaderModule({ code: seriesLineShaderCode });
+    const seriesLineVertLayout = {
+      arrayStride: 24,
+      // 6 floats × 4 bytes
+      attributes: [
+        { format: "float32x2", offset: 0, shaderLocation: 0 },
+        // coords
+        { format: "float32x4", offset: 8, shaderLocation: 1 }
+        // color rgba
+      ]
+    };
+    this.seriesLinePipeline = this.device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module: seriesLineModule, entryPoint: "vsSeriesLine", buffers: [seriesLineVertLayout] },
+      fragment: {
+        module: seriesLineModule,
+        entryPoint: "fsSeriesLine",
+        targets: [{
+          format: this.canvasFormat,
+          blend: {
+            color: { operation: "add", srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha" },
+            alpha: { operation: "add", srcFactor: "one", dstFactor: "zero" }
           }
-          return {
-            x: xn,
-            y: yn,
-            xSorted: xIsString || xIsDate || (() => {
-              for (let i = 1; i < xn.length; i++) {
-                if (xn[i] < xn[i - 1]) return false;
-              }
-              return true;
-            })(),
-            ...s.color !== void 0 && { color: s.color },
-            ...s.lineStyle !== void 0 && { lineStyle: s.lineStyle },
-            ...s.lineWidth !== void 0 && { lineWidth: s.lineWidth },
-            ...s.marker !== void 0 && { marker: s.marker }
-          };
+        }]
+      },
+      primitive: { topology: "triangle-list" }
+    });
+    const blitShaderModule = this.device.createShaderModule({ code: blitShaderCode });
+    this.blitPipeline = this.device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module: blitShaderModule, entryPoint: "vsMain" },
+      fragment: { module: blitShaderModule, entryPoint: "fsMain", targets: [{ format: this.canvasFormat }] },
+      primitive: { topology: "triangle-list" }
+    });
+    this.blitSampler = this.device.createSampler({ magFilter: "linear", minFilter: "linear" });
+    const computeModule = this.device.createShaderModule({ code: computeShaderCode });
+    this.computePipeline = this.device.createComputePipeline({
+      layout: "auto",
+      compute: { module: computeModule, entryPoint: "csMain" }
+    });
+    const markerComputeModule = this.device.createShaderModule({ code: markerComputeShaderCode });
+    this.markerComputePipeline = this.device.createComputePipeline({
+      layout: "auto",
+      compute: { module: markerComputeModule, entryPoint: "csMarker" }
+    });
+    const markerModule = this.device.createShaderModule({ code: markerShaderCode });
+    const markerVertexLayout = {
+      arrayStride: 15 * 4,
+      // 15 floats × 4 bytes
+      attributes: [
+        { shaderLocation: 0, offset: 0, format: "float32x2" },
+        // clipPos
+        { shaderLocation: 1, offset: 8, format: "float32x2" },
+        // localPos: offset from centre (ssaa px)
+        { shaderLocation: 2, offset: 16, format: "float32x2" },
+        // radii
+        { shaderLocation: 3, offset: 24, format: "float32x4" },
+        // faceColor rgba
+        { shaderLocation: 4, offset: 40, format: "float32x4" },
+        // edgeColor rgba
+        { shaderLocation: 5, offset: 56, format: "float32" }
+        // shapeId
+      ]
+    };
+    this.markerRenderPipeline = this.device.createRenderPipeline({
+      layout: "auto",
+      vertex: { module: markerModule, entryPoint: "vsMarker", buffers: [markerVertexLayout] },
+      fragment: {
+        module: markerModule,
+        entryPoint: "fsMarker",
+        targets: [{
+          format: this.canvasFormat,
+          blend: {
+            color: { operation: "add", srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha" },
+            alpha: { operation: "add", srcFactor: "one", dstFactor: "zero" }
+          }
+        }]
+      },
+      primitive: { topology: "triangle-list" }
+    });
+    const dashedComputeModule = this.device.createShaderModule({ code: dashedComputeShaderCode });
+    this.dashedComputePipeline = this.device.createComputePipeline({
+      layout: "auto",
+      compute: { module: dashedComputeModule, entryPoint: "csDashed" }
+    });
+    if (this.internalSeries.length > 0) {
+      this.uploadSeriesGpuBuffers();
+    }
+  }
+  // ---- Data / view management ----
+  setData(seriesList) {
+    this.seriesList = seriesList;
+    const xSample = seriesList.flatMap((s) => s.x);
+    const ySample = seriesList.flatMap((s) => s.y);
+    const xIsString = xSample.length > 0 && typeof xSample[0] === "string";
+    const xIsDate = xSample.length > 0 && xSample[0] instanceof Date;
+    const yIsString = ySample.length > 0 && typeof ySample[0] === "string";
+    const yIsDate = ySample.length > 0 && ySample[0] instanceof Date;
+    this.xIsDate = xIsDate;
+    this.yIsDate = yIsDate;
+    this.xLabels = xIsString ? [...new Set(xSample)].sort() : null;
+    this.yLabels = yIsString ? [...new Set(ySample)].sort() : null;
+    const xMap = this.xLabels ? new Map(this.xLabels.map((l, i) => [l, i])) : null;
+    const yMap = this.yLabels ? new Map(this.yLabels.map((l, i) => [l, i])) : null;
+    this.internalSeries = seriesList.map((s) => {
+      let xn = xIsString ? s.x.map((v) => xMap.get(v) ?? 0) : xIsDate ? s.x.map((d) => d.getTime()) : s.x;
+      let yn = yIsString ? s.y.map((v) => yMap.get(v) ?? 0) : yIsDate ? s.y.map((d) => d.getTime()) : s.y;
+      if ((xIsString || xIsDate) && xn.length > 1) {
+        const idx = Array.from({ length: xn.length }, (_, i) => i).sort((a, b) => xn[a] - xn[b]);
+        xn = idx.map((i) => xn[i]);
+        yn = idx.map((i) => yn[i]);
+      }
+      return {
+        x: xn,
+        y: yn,
+        xSorted: xIsString || xIsDate || (() => {
+          for (let i = 1; i < xn.length; i++) {
+            if (xn[i] < xn[i - 1]) return false;
+          }
+          return true;
+        })(),
+        ...s.color !== void 0 && { color: s.color },
+        ...s.lineStyle !== void 0 && { lineStyle: s.lineStyle },
+        ...s.lineWidth !== void 0 && { lineWidth: s.lineWidth },
+        ...s.marker !== void 0 && { marker: s.marker }
+      };
+    });
+    this.resetDefaultView();
+    if (this.device) {
+      this.uploadSeriesGpuBuffers();
+    }
+  }
+  destroySeriesGpuBuffers() {
+    for (const b of this.seriesRawBufs) b.destroy();
+    for (const b of this.seriesOutBufs) b?.destroy();
+    for (const b of this.seriesParamBufs) b?.destroy();
+    for (const b of this.markerOutBufs) b?.destroy();
+    for (const b of this.markerParamBufs) b?.destroy();
+    for (const b of this.dashedOutBufs) b?.destroy();
+    for (const b of this.dashedParamBufs) b?.destroy();
+    for (const b of this.dashedDrawArgsBufs) b?.destroy();
+    this.seriesRawBufs = [];
+    this.seriesOutBufs = [];
+    this.seriesParamBufs = [];
+    this.seriesOutCounts = [];
+    this.markerOutBufs = [];
+    this.markerParamBufs = [];
+    this.markerOutCounts = [];
+    this.dashedOutBufs = [];
+    this.dashedParamBufs = [];
+    this.dashedDrawArgsBufs = [];
+    this.dashedNumSegs = [];
+  }
+  /** Creates (or recreates) per-series GPU buffers.
+   *  Raw x/y data is uploaded here and never touched again until setData() is called.
+   *  Output buffers are fixed size (MAX_COMPUTE_SEGS segments). */
+  uploadSeriesGpuBuffers() {
+    this.destroySeriesGpuBuffers();
+    const MAX2 = this.MAX_COMPUTE_SEGS;
+    for (const series of this.internalSeries) {
+      const n = series.x.length;
+      const rawData = new Float32Array(n * 2);
+      for (let i = 0; i < n; i++) {
+        rawData[i * 2] = series.x[i];
+        rawData[i * 2 + 1] = series.y[i];
+      }
+      const rawBuf = this.device.createBuffer({
+        size: Math.max(rawData.byteLength, 8),
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+      });
+      if (rawData.byteLength > 0) this.device.queue.writeBuffer(rawBuf, 0, rawData);
+      const markersOnly = series.lineStyle === "none";
+      if (!markersOnly) {
+        const outBuf = this.device.createBuffer({
+          size: MAX2 * 36 * 4,
+          // MAX_SEGS * 6 verts * 6 floats * 4 bytes
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX
         });
-        this.resetDefaultView();
-        if (this.device) {
-          this.uploadSeriesGpuBuffers();
+        const paramBuf = this.device.createBuffer({
+          size: 80,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        });
+        this.seriesOutBufs.push(outBuf);
+        this.seriesParamBufs.push(paramBuf);
+      } else {
+        this.seriesOutBufs.push(null);
+        this.seriesParamBufs.push(null);
+      }
+      this.seriesRawBufs.push(rawBuf);
+      this.seriesOutCounts.push(0);
+      if (series.marker && series.marker.shape !== "none") {
+        const MAX_M = this.MAX_MARKER_COUNT;
+        const mOutBuf = this.device.createBuffer({
+          // 6 verts × 15 floats × 4 bytes per marker
+          size: MAX_M * 6 * 15 * 4,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX
+        });
+        const mParamBuf = this.device.createBuffer({
+          size: 112,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        });
+        this.markerOutBufs.push(mOutBuf);
+        this.markerParamBufs.push(mParamBuf);
+      } else {
+        this.markerOutBufs.push(null);
+        this.markerParamBufs.push(null);
+      }
+      this.markerOutCounts.push(0);
+      const pattern = DASH_PATTERNS[series.lineStyle ?? "-"] ?? [];
+      if (pattern.length > 0) {
+        const dOutBuf = this.device.createBuffer({
+          label: "dashed out",
+          size: this.MAX_DASHED_OUT_QUADS * 36 * 4,
+          // quads * 6 verts * 6 floats * 4 bytes
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX
+        });
+        const dParamBuf = this.device.createBuffer({
+          label: "dashed param",
+          size: 128,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        });
+        const dDrawArgsBuf = this.device.createBuffer({
+          label: "dashed draw args",
+          size: 16,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT
+        });
+        this.dashedOutBufs.push(dOutBuf);
+        this.dashedParamBufs.push(dParamBuf);
+        this.dashedDrawArgsBufs.push(dDrawArgsBuf);
+      } else {
+        this.dashedOutBufs.push(null);
+        this.dashedParamBufs.push(null);
+        this.dashedDrawArgsBufs.push(null);
+      }
+      this.dashedNumSegs.push(0);
+    }
+  }
+  resetDefaultView() {
+    let minDX = Infinity, minDY = Infinity;
+    for (const s of this.internalSeries) {
+      const n = s.x.length;
+      for (let i = 1; i < n; i++) {
+        const dx = Math.abs(s.x[i] - s.x[i - 1]);
+        const dy = Math.abs(s.y[i] - s.y[i - 1]);
+        if (dx > 1e-300 && dx < minDX) minDX = dx;
+        if (dy > 1e-300 && dy < minDY) minDY = dy;
+      }
+    }
+    this.minDataSpanX = isFinite(minDX) ? minDX : 1e-9;
+    this.minDataSpanY = isFinite(minDY) ? minDY : 1e-9;
+    let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+    for (const s of this.internalSeries) {
+      for (let i = 0; i < s.x.length; i++) {
+        if (s.x[i] < xMin) xMin = s.x[i];
+        if (s.x[i] > xMax) xMax = s.x[i];
+        if (s.y[i] < yMin) yMin = s.y[i];
+        if (s.y[i] > yMax) yMax = s.y[i];
+      }
+    }
+    if (!isFinite(xMin)) {
+      xMin = 0;
+      xMax = 1;
+      yMin = 0;
+      yMax = 1;
+    }
+    if (this.xLabels) {
+      this.defaultViewXMin = -0.5;
+      this.defaultViewXMax = this.xLabels.length - 0.5;
+    } else if (this.xIsDate) {
+      const margin = (xMax - xMin) * 0.05 || 36e5;
+      this.defaultViewXMin = xMin - margin;
+      this.defaultViewXMax = xMax + margin;
+    } else {
+      const xTicks = niceTicks(xMin, xMax, 5);
+      this.defaultViewXMin = xTicks[0];
+      this.defaultViewXMax = xTicks[xTicks.length - 1];
+    }
+    if (this.yLabels) {
+      this.defaultViewYMin = -0.5;
+      this.defaultViewYMax = this.yLabels.length - 0.5;
+    } else if (this.yIsDate) {
+      const margin = (yMax - yMin) * 0.05 || 36e5;
+      this.defaultViewYMin = yMin - margin;
+      this.defaultViewYMax = yMax + margin;
+    } else {
+      const yTicks = niceTicks(yMin, yMax, 5);
+      this.defaultViewYMin = yTicks[0];
+      this.defaultViewYMax = yTicks[yTicks.length - 1];
+    }
+    this.viewXMin = this.defaultViewXMin;
+    this.viewXMax = this.defaultViewXMax;
+    this.viewYMin = this.defaultViewYMin;
+    this.viewYMax = this.defaultViewYMax;
+  }
+  zoomAround(dataX, dataY, factor) {
+    const xRange = this.viewXMax - this.viewXMin;
+    const yRange = this.viewYMax - this.viewYMin;
+    const tx = (dataX - this.viewXMin) / xRange;
+    const ty = (dataY - this.viewYMin) / yRange;
+    const minSpanX = this.minDataSpanX || 1e-9;
+    const minSpanY = this.minDataSpanY || 1e-9;
+    const plotWidthPx = (this.plotRectX1 - this.plotRectX0) / 2 * this.canvas.clientWidth;
+    const plotHeightPx = (this.plotRectY1 - this.plotRectY0) / 2 * this.canvas.clientHeight;
+    const dataSpanX = this.defaultViewXMax - this.defaultViewXMin;
+    const dataSpanY = this.defaultViewYMax - this.defaultViewYMin;
+    const maxSpanX = dataSpanX * Math.max(plotWidthPx, 1);
+    const maxSpanY = dataSpanY * Math.max(plotHeightPx, 1);
+    let newXMin = dataX - tx * xRange * factor;
+    let newXMax = newXMin + xRange * factor;
+    let newYMin = dataY - ty * yRange * factor;
+    let newYMax = newYMin + yRange * factor;
+    if (newXMax - newXMin < minSpanX) {
+      const mid = (newXMin + newXMax) / 2;
+      newXMin = mid - minSpanX / 2;
+      newXMax = mid + minSpanX / 2;
+    } else if (maxSpanX > 0 && newXMax - newXMin > maxSpanX) {
+      const mid = (newXMin + newXMax) / 2;
+      newXMin = mid - maxSpanX / 2;
+      newXMax = mid + maxSpanX / 2;
+    }
+    if (newYMax - newYMin < minSpanY) {
+      const mid = (newYMin + newYMax) / 2;
+      newYMin = mid - minSpanY / 2;
+      newYMax = mid + minSpanY / 2;
+    } else if (maxSpanY > 0 && newYMax - newYMin > maxSpanY) {
+      const mid = (newYMin + newYMax) / 2;
+      newYMin = mid - maxSpanY / 2;
+      newYMax = mid + maxSpanY / 2;
+    }
+    this.viewXMin = newXMin;
+    this.viewXMax = newXMax;
+    this.viewYMin = newYMin;
+    this.viewYMax = newYMax;
+  }
+  clientToData(clientX, clientY) {
+    const rect = this.canvas.getBoundingClientRect();
+    const clipX = (clientX - rect.left) / rect.width * 2 - 1;
+    const clipY = 1 - (clientY - rect.top) / rect.height * 2;
+    const tx = (clipX - this.plotRectX0) / (this.plotRectX1 - this.plotRectX0);
+    const ty = (clipY - this.plotRectY0) / (this.plotRectY1 - this.plotRectY0);
+    return {
+      x: this.viewXMin + tx * (this.viewXMax - this.viewXMin),
+      y: this.viewYMin + ty * (this.viewYMax - this.viewYMin)
+    };
+  }
+  setMode(mode) {
+    this.plotMode = mode;
+    this.btnZoomRegion.classList.remove("active");
+    this.btnInspect.classList.remove("active");
+    this.crosshairVEl.style.display = "none";
+    this.crosshairHEl.style.display = "none";
+    this.tooltipEl.style.display = "none";
+    if (mode === "zoomRegion") {
+      this.canvas.style.cursor = "crosshair";
+      this.btnZoomRegion.classList.add("active");
+    } else if (mode === "inspect") {
+      this.canvas.style.cursor = "crosshair";
+      this.btnInspect.classList.add("active");
+    } else {
+      this.canvas.style.cursor = "grab";
+    }
+  }
+  formatXInspect(v) {
+    if (this.xLabels) return this.xLabels[Math.round(v)] ?? String(Math.round(v));
+    if (this.xIsDate) return new Date(v).toLocaleString();
+    return parseFloat(v.toPrecision(6)).toString();
+  }
+  formatYInspect(v) {
+    if (this.yLabels) return this.yLabels[Math.round(v)] ?? String(Math.round(v));
+    if (this.yIsDate) return new Date(v).toLocaleString();
+    return parseFloat(v.toPrecision(6)).toString();
+  }
+  updateInspector(mouseClientX, mouseClientY) {
+    const rect = this.canvas.getBoundingClientRect();
+    const w = rect.width, h = rect.height;
+    const mousePxX = mouseClientX - rect.left;
+    const mousePxY = mouseClientY - rect.top;
+    const plotPxX0 = (this.plotRectX0 + 1) / 2 * w;
+    const plotPxX1 = (this.plotRectX1 + 1) / 2 * w;
+    const plotPxY0 = (1 - this.plotRectY1) / 2 * h;
+    const plotPxY1 = (1 - this.plotRectY0) / 2 * h;
+    const hide = () => {
+      this.crosshairVEl.style.display = "none";
+      this.crosshairHEl.style.display = "none";
+      this.tooltipEl.style.display = "none";
+    };
+    if (mousePxX < plotPxX0 || mousePxX > plotPxX1 || mousePxY < plotPxY0 || mousePxY > plotPxY1) {
+      hide();
+      return;
+    }
+    const mouseDataX = this.viewXMin + (mousePxX - plotPxX0) / (plotPxX1 - plotPxX0) * (this.viewXMax - this.viewXMin);
+    const dtoPxX = (x) => plotPxX0 + (x - this.viewXMin) / (this.viewXMax - this.viewXMin) * (plotPxX1 - plotPxX0);
+    const dtoPxY = (y) => {
+      const t = (y - this.viewYMin) / (this.viewYMax - this.viewYMin);
+      return (1 - (this.plotRectY0 + t * (this.plotRectY1 - this.plotRectY0))) / 2 * h;
+    };
+    let bestDist2 = 30 * 30;
+    let bestSeries = -1, bestPt = -1;
+    for (let si = 0; si < this.internalSeries.length; si++) {
+      const s = this.internalSeries[si];
+      if (s.x.length === 0) continue;
+      let lo = 0, hi = s.x.length - 1;
+      while (lo < hi) {
+        const mid = lo + hi >> 1;
+        if (s.x[mid] < mouseDataX) lo = mid + 1;
+        else hi = mid;
+      }
+      const W = 200;
+      for (let i = Math.max(0, lo - W); i <= Math.min(s.x.length - 1, lo + W); i++) {
+        const dx = dtoPxX(s.x[i]) - mousePxX;
+        const dy = dtoPxY(s.y[i]) - mousePxY;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < bestDist2) {
+          bestDist2 = d2;
+          bestSeries = si;
+          bestPt = i;
         }
       }
-      destroySeriesGpuBuffers() {
-        for (const b of this.seriesRawBufs) b.destroy();
-        for (const b of this.seriesOutBufs) b?.destroy();
-        for (const b of this.seriesParamBufs) b?.destroy();
-        for (const b of this.markerOutBufs) b?.destroy();
-        for (const b of this.markerParamBufs) b?.destroy();
-        for (const b of this.dashedOutBufs) b?.destroy();
-        for (const b of this.dashedParamBufs) b?.destroy();
-        for (const b of this.dashedDrawArgsBufs) b?.destroy();
-        this.seriesRawBufs = [];
-        this.seriesOutBufs = [];
-        this.seriesParamBufs = [];
-        this.seriesOutCounts = [];
-        this.markerOutBufs = [];
-        this.markerParamBufs = [];
-        this.markerOutCounts = [];
-        this.dashedOutBufs = [];
-        this.dashedParamBufs = [];
-        this.dashedDrawArgsBufs = [];
-        this.dashedNumSegs = [];
-      }
-      /** Creates (or recreates) per-series GPU buffers.
-       *  Raw x/y data is uploaded here and never touched again until setData() is called.
-       *  Output buffers are fixed size (MAX_COMPUTE_SEGS segments). */
-      uploadSeriesGpuBuffers() {
-        this.destroySeriesGpuBuffers();
-        const MAX2 = this.MAX_COMPUTE_SEGS;
-        for (const series of this.internalSeries) {
-          const n = series.x.length;
-          const rawData = new Float32Array(n * 2);
-          for (let i = 0; i < n; i++) {
-            rawData[i * 2] = series.x[i];
-            rawData[i * 2 + 1] = series.y[i];
-          }
-          const rawBuf = this.device.createBuffer({
-            size: Math.max(rawData.byteLength, 8),
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-          });
-          if (rawData.byteLength > 0) this.device.queue.writeBuffer(rawBuf, 0, rawData);
-          const markersOnly = series.lineStyle === "none";
-          if (!markersOnly) {
-            const outBuf = this.device.createBuffer({
-              size: MAX2 * 36 * 4,
-              // MAX_SEGS * 6 verts * 6 floats * 4 bytes
-              usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX
-            });
-            const paramBuf = this.device.createBuffer({
-              size: 80,
-              usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
-            });
-            this.seriesOutBufs.push(outBuf);
-            this.seriesParamBufs.push(paramBuf);
-          } else {
-            this.seriesOutBufs.push(null);
-            this.seriesParamBufs.push(null);
-          }
-          this.seriesRawBufs.push(rawBuf);
-          this.seriesOutCounts.push(0);
-          if (series.marker && series.marker.shape !== "none") {
-            const MAX_M = this.MAX_MARKER_COUNT;
-            const mOutBuf = this.device.createBuffer({
-              // 6 verts × 15 floats × 4 bytes per marker
-              size: MAX_M * 6 * 15 * 4,
-              usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX
-            });
-            const mParamBuf = this.device.createBuffer({
-              size: 112,
-              usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
-            });
-            this.markerOutBufs.push(mOutBuf);
-            this.markerParamBufs.push(mParamBuf);
-          } else {
-            this.markerOutBufs.push(null);
-            this.markerParamBufs.push(null);
-          }
-          this.markerOutCounts.push(0);
-          const pattern = DASH_PATTERNS[series.lineStyle ?? "-"] ?? [];
-          if (pattern.length > 0) {
-            const dOutBuf = this.device.createBuffer({
-              label: "dashed out",
-              size: this.MAX_DASHED_OUT_QUADS * 36 * 4,
-              // quads * 6 verts * 6 floats * 4 bytes
-              usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX
-            });
-            const dParamBuf = this.device.createBuffer({
-              label: "dashed param",
-              size: 128,
-              usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
-            });
-            const dDrawArgsBuf = this.device.createBuffer({
-              label: "dashed draw args",
-              size: 16,
-              usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT
-            });
-            this.dashedOutBufs.push(dOutBuf);
-            this.dashedParamBufs.push(dParamBuf);
-            this.dashedDrawArgsBufs.push(dDrawArgsBuf);
-          } else {
-            this.dashedOutBufs.push(null);
-            this.dashedParamBufs.push(null);
-            this.dashedDrawArgsBufs.push(null);
-          }
-          this.dashedNumSegs.push(0);
-        }
-      }
-      resetDefaultView() {
-        let minDX = Infinity, minDY = Infinity;
-        for (const s of this.internalSeries) {
-          const n = s.x.length;
-          for (let i = 1; i < n; i++) {
-            const dx = Math.abs(s.x[i] - s.x[i - 1]);
-            const dy = Math.abs(s.y[i] - s.y[i - 1]);
-            if (dx > 1e-300 && dx < minDX) minDX = dx;
-            if (dy > 1e-300 && dy < minDY) minDY = dy;
-          }
-        }
-        this.minDataSpanX = isFinite(minDX) ? minDX : 1e-9;
-        this.minDataSpanY = isFinite(minDY) ? minDY : 1e-9;
-        let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
-        for (const s of this.internalSeries) {
-          for (let i = 0; i < s.x.length; i++) {
-            if (s.x[i] < xMin) xMin = s.x[i];
-            if (s.x[i] > xMax) xMax = s.x[i];
-            if (s.y[i] < yMin) yMin = s.y[i];
-            if (s.y[i] > yMax) yMax = s.y[i];
-          }
-        }
-        if (!isFinite(xMin)) {
-          xMin = 0;
-          xMax = 1;
-          yMin = 0;
-          yMax = 1;
-        }
-        if (this.xLabels) {
-          this.defaultViewXMin = -0.5;
-          this.defaultViewXMax = this.xLabels.length - 0.5;
-        } else if (this.xIsDate) {
-          const margin = (xMax - xMin) * 0.05 || 36e5;
-          this.defaultViewXMin = xMin - margin;
-          this.defaultViewXMax = xMax + margin;
-        } else {
-          const xTicks = niceTicks(xMin, xMax, 5);
-          this.defaultViewXMin = xTicks[0];
-          this.defaultViewXMax = xTicks[xTicks.length - 1];
-        }
-        if (this.yLabels) {
-          this.defaultViewYMin = -0.5;
-          this.defaultViewYMax = this.yLabels.length - 0.5;
-        } else if (this.yIsDate) {
-          const margin = (yMax - yMin) * 0.05 || 36e5;
-          this.defaultViewYMin = yMin - margin;
-          this.defaultViewYMax = yMax + margin;
-        } else {
-          const yTicks = niceTicks(yMin, yMax, 5);
-          this.defaultViewYMin = yTicks[0];
-          this.defaultViewYMax = yTicks[yTicks.length - 1];
-        }
-        this.viewXMin = this.defaultViewXMin;
-        this.viewXMax = this.defaultViewXMax;
-        this.viewYMin = this.defaultViewYMin;
-        this.viewYMax = this.defaultViewYMax;
-      }
-      zoomAround(dataX, dataY, factor) {
-        const xRange = this.viewXMax - this.viewXMin;
-        const yRange = this.viewYMax - this.viewYMin;
-        const tx = (dataX - this.viewXMin) / xRange;
-        const ty = (dataY - this.viewYMin) / yRange;
-        const minSpanX = this.minDataSpanX || 1e-9;
-        const minSpanY = this.minDataSpanY || 1e-9;
-        const plotWidthPx = (this.plotRectX1 - this.plotRectX0) / 2 * this.canvas.clientWidth;
-        const plotHeightPx = (this.plotRectY1 - this.plotRectY0) / 2 * this.canvas.clientHeight;
-        const dataSpanX = this.defaultViewXMax - this.defaultViewXMin;
-        const dataSpanY = this.defaultViewYMax - this.defaultViewYMin;
-        const maxSpanX = dataSpanX * Math.max(plotWidthPx, 1);
-        const maxSpanY = dataSpanY * Math.max(plotHeightPx, 1);
-        let newXMin = dataX - tx * xRange * factor;
-        let newXMax = newXMin + xRange * factor;
-        let newYMin = dataY - ty * yRange * factor;
-        let newYMax = newYMin + yRange * factor;
-        if (newXMax - newXMin < minSpanX) {
-          const mid = (newXMin + newXMax) / 2;
-          newXMin = mid - minSpanX / 2;
-          newXMax = mid + minSpanX / 2;
-        } else if (maxSpanX > 0 && newXMax - newXMin > maxSpanX) {
-          const mid = (newXMin + newXMax) / 2;
-          newXMin = mid - maxSpanX / 2;
-          newXMax = mid + maxSpanX / 2;
-        }
-        if (newYMax - newYMin < minSpanY) {
-          const mid = (newYMin + newYMax) / 2;
-          newYMin = mid - minSpanY / 2;
-          newYMax = mid + minSpanY / 2;
-        } else if (maxSpanY > 0 && newYMax - newYMin > maxSpanY) {
-          const mid = (newYMin + newYMax) / 2;
-          newYMin = mid - maxSpanY / 2;
-          newYMax = mid + maxSpanY / 2;
-        }
-        this.viewXMin = newXMin;
-        this.viewXMax = newXMax;
-        this.viewYMin = newYMin;
-        this.viewYMax = newYMax;
-      }
-      clientToData(clientX, clientY) {
-        const rect = this.canvas.getBoundingClientRect();
-        const clipX = (clientX - rect.left) / rect.width * 2 - 1;
-        const clipY = 1 - (clientY - rect.top) / rect.height * 2;
-        const tx = (clipX - this.plotRectX0) / (this.plotRectX1 - this.plotRectX0);
-        const ty = (clipY - this.plotRectY0) / (this.plotRectY1 - this.plotRectY0);
-        return {
-          x: this.viewXMin + tx * (this.viewXMax - this.viewXMin),
-          y: this.viewYMin + ty * (this.viewYMax - this.viewYMin)
-        };
-      }
-      setMode(mode) {
-        this.plotMode = mode;
-        this.btnZoomRegion.classList.remove("active");
-        this.btnInspect.classList.remove("active");
-        this.crosshairVEl.style.display = "none";
-        this.crosshairHEl.style.display = "none";
-        this.tooltipEl.style.display = "none";
-        if (mode === "zoomRegion") {
-          this.canvas.style.cursor = "crosshair";
-          this.btnZoomRegion.classList.add("active");
-        } else if (mode === "inspect") {
-          this.canvas.style.cursor = "crosshair";
-          this.btnInspect.classList.add("active");
-        } else {
-          this.canvas.style.cursor = "grab";
-        }
-      }
-      formatXInspect(v) {
-        if (this.xLabels) return this.xLabels[Math.round(v)] ?? String(Math.round(v));
-        if (this.xIsDate) return new Date(v).toLocaleString();
-        return parseFloat(v.toPrecision(6)).toString();
-      }
-      formatYInspect(v) {
-        if (this.yLabels) return this.yLabels[Math.round(v)] ?? String(Math.round(v));
-        if (this.yIsDate) return new Date(v).toLocaleString();
-        return parseFloat(v.toPrecision(6)).toString();
-      }
-      updateInspector(mouseClientX, mouseClientY) {
-        const rect = this.canvas.getBoundingClientRect();
-        const w = rect.width, h = rect.height;
-        const mousePxX = mouseClientX - rect.left;
-        const mousePxY = mouseClientY - rect.top;
-        const plotPxX0 = (this.plotRectX0 + 1) / 2 * w;
-        const plotPxX1 = (this.plotRectX1 + 1) / 2 * w;
-        const plotPxY0 = (1 - this.plotRectY1) / 2 * h;
-        const plotPxY1 = (1 - this.plotRectY0) / 2 * h;
-        const hide = () => {
-          this.crosshairVEl.style.display = "none";
-          this.crosshairHEl.style.display = "none";
-          this.tooltipEl.style.display = "none";
-        };
-        if (mousePxX < plotPxX0 || mousePxX > plotPxX1 || mousePxY < plotPxY0 || mousePxY > plotPxY1) {
-          hide();
-          return;
-        }
-        const mouseDataX = this.viewXMin + (mousePxX - plotPxX0) / (plotPxX1 - plotPxX0) * (this.viewXMax - this.viewXMin);
-        const dtoPxX = (x) => plotPxX0 + (x - this.viewXMin) / (this.viewXMax - this.viewXMin) * (plotPxX1 - plotPxX0);
-        const dtoPxY = (y) => {
-          const t = (y - this.viewYMin) / (this.viewYMax - this.viewYMin);
-          return (1 - (this.plotRectY0 + t * (this.plotRectY1 - this.plotRectY0))) / 2 * h;
-        };
-        let bestDist2 = 30 * 30;
-        let bestSeries = -1, bestPt = -1;
-        for (let si = 0; si < this.internalSeries.length; si++) {
-          const s = this.internalSeries[si];
-          if (s.x.length === 0) continue;
-          let lo = 0, hi = s.x.length - 1;
-          while (lo < hi) {
-            const mid = lo + hi >> 1;
-            if (s.x[mid] < mouseDataX) lo = mid + 1;
-            else hi = mid;
-          }
-          const W = 200;
-          for (let i = Math.max(0, lo - W); i <= Math.min(s.x.length - 1, lo + W); i++) {
-            const dx = dtoPxX(s.x[i]) - mousePxX;
-            const dy = dtoPxY(s.y[i]) - mousePxY;
-            const d2 = dx * dx + dy * dy;
-            if (d2 < bestDist2) {
-              bestDist2 = d2;
-              bestSeries = si;
-              bestPt = i;
-            }
-          }
-        }
-        if (bestSeries < 0) {
-          hide();
-          return;
-        }
-        const dataX = this.internalSeries[bestSeries].x[bestPt];
-        const dataY = this.internalSeries[bestSeries].y[bestPt];
-        const ptPxX = dtoPxX(dataX);
-        const ptPxY = dtoPxY(dataY);
-        this.crosshairVEl.style.display = "block";
-        this.crosshairVEl.style.left = ptPxX + "px";
-        this.crosshairHEl.style.display = "block";
-        this.crosshairHEl.style.top = ptPxY + "px";
-        const label = this.internalSeries.length > 1 ? `x: ${this.formatXInspect(dataX)}
+    }
+    if (bestSeries < 0) {
+      hide();
+      return;
+    }
+    const dataX = this.internalSeries[bestSeries].x[bestPt];
+    const dataY = this.internalSeries[bestSeries].y[bestPt];
+    const ptPxX = dtoPxX(dataX);
+    const ptPxY = dtoPxY(dataY);
+    this.crosshairVEl.style.display = "block";
+    this.crosshairVEl.style.left = ptPxX + "px";
+    this.crosshairHEl.style.display = "block";
+    this.crosshairHEl.style.top = ptPxY + "px";
+    const label = this.internalSeries.length > 1 ? `x: ${this.formatXInspect(dataX)}
 y: ${this.formatYInspect(dataY)}
 series: ${bestSeries + 1}` : `x: ${this.formatXInspect(dataX)}
 y: ${this.formatYInspect(dataY)}`;
-        this.tooltipEl.textContent = label;
-        this.tooltipEl.style.display = "block";
-        let tipX = mousePxX + 14;
-        let tipY = mousePxY - this.tooltipEl.offsetHeight - 6;
-        if (tipX + this.tooltipEl.offsetWidth > w - 4) tipX = mousePxX - this.tooltipEl.offsetWidth - 14;
-        if (tipY < 4) tipY = mousePxY + 14;
-        if (tipX < 4) tipX = 4;
-        this.tooltipEl.style.left = tipX + "px";
-        this.tooltipEl.style.top = tipY + "px";
-      }
-      // ---- Compute plot rectangle from padding options (in clip space) ----
-      computePlotRect(w, h, yTickMaxWidthPx) {
-        const o = this.opts;
-        const fs = o.fontSize;
-        const titleFs = o.titleFontSize;
-        const pxX = 2 / w;
-        const pxY = 2 / h;
-        const capH = fs * 0.75;
-        const titleCapH = titleFs * 0.75;
-        const yLabelWidth = capH;
-        const tickDir = o.style.tickDirection;
-        const tickOutPx = tickDir === "out" || tickDir === "both" ? 8 : 0;
-        const tickToPlotGapPx = tickOutPx + 4;
-        const leftPx = o.paddingLeft + yLabelWidth + o.paddingYLabelToYTicks + yTickMaxWidthPx + tickToPlotGapPx;
-        const rightPx = w - o.paddingRight;
-        const topPx = o.paddingTop + titleCapH + o.paddingTitleToPlot;
-        const xTickLabelHeightPx = capH;
-        const tickLenPx = 8;
-        const tickDir2 = o.style.tickDirection;
-        const xTickOutPx = tickDir2 === "out" || tickDir2 === "both" ? tickLenPx : 0;
-        const bottomPx = h - (o.paddingBottom + capH + o.paddingXLabelToPlot + xTickLabelHeightPx + xTickOutPx + 4);
-        const x0 = leftPx * pxX - 1;
-        const x1 = rightPx * pxX - 1;
-        const y1 = 1 - topPx * pxY;
-        const y0 = 1 - bottomPx * pxY;
-        return { x0, y0, x1, y1 };
-      }
-      // ---- Save as image / PDF ----
-      async saveAs(format) {
-        this.render();
-        const w = this.canvas.width;
-        const h = this.canvas.height;
-        const offscreen = document.createElement("canvas");
-        offscreen.width = w;
-        offscreen.height = h;
-        offscreen.getContext("2d").drawImage(this.canvas, 0, 0);
-        let blob;
-        let filename;
-        if (format === "png") {
-          blob = await new Promise((res) => offscreen.toBlob((b) => res(b), "image/png"));
-          filename = "plot.png";
-        } else if (format === "jpeg") {
-          blob = await new Promise((res) => offscreen.toBlob((b) => res(b), "image/jpeg", 0.92));
-          filename = "plot.jpg";
-        } else {
-          const jpegBlob = await new Promise((res) => offscreen.toBlob((b) => res(b), "image/jpeg", 0.92));
-          const jpegBytes = new Uint8Array(await jpegBlob.arrayBuffer());
-          blob = this.buildSimplePdf(jpegBytes, w, h);
-          filename = "plot.pdf";
-        }
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(url), 1e4);
-      }
-      /** Builds a minimal single-page PDF that embeds the supplied JPEG bytes. */
-      buildSimplePdf(jpegBytes, imgW, imgH) {
-        const enc = new TextEncoder();
-        const e = (s) => enc.encode(s);
-        const contStr = `q ${imgW} 0 0 ${imgH} 0 0 cm /Im0 Do Q
+    this.tooltipEl.textContent = label;
+    this.tooltipEl.style.display = "block";
+    let tipX = mousePxX + 14;
+    let tipY = mousePxY - this.tooltipEl.offsetHeight - 6;
+    if (tipX + this.tooltipEl.offsetWidth > w - 4) tipX = mousePxX - this.tooltipEl.offsetWidth - 14;
+    if (tipY < 4) tipY = mousePxY + 14;
+    if (tipX < 4) tipX = 4;
+    this.tooltipEl.style.left = tipX + "px";
+    this.tooltipEl.style.top = tipY + "px";
+  }
+  // ---- Compute plot rectangle from padding options (in clip space) ----
+  computePlotRect(w, h, yTickMaxWidthPx) {
+    const o = this.opts;
+    const fs = o.fontSize;
+    const titleFs = o.titleFontSize;
+    const pxX = 2 / w;
+    const pxY = 2 / h;
+    const capH = fs * 0.75;
+    const titleCapH = titleFs * 0.75;
+    const yLabelWidth = capH;
+    const tickDir = o.style.tickDirection;
+    const tickOutPx = tickDir === "out" || tickDir === "both" ? 8 : 0;
+    const tickToPlotGapPx = tickOutPx + 4;
+    const leftPx = o.paddingLeft + yLabelWidth + o.paddingYLabelToYTicks + yTickMaxWidthPx + tickToPlotGapPx;
+    const rightPx = w - o.paddingRight;
+    const topPx = o.paddingTop + titleCapH + o.paddingTitleToPlot;
+    const xTickLabelHeightPx = capH;
+    const tickLenPx = 8;
+    const tickDir2 = o.style.tickDirection;
+    const xTickOutPx = tickDir2 === "out" || tickDir2 === "both" ? tickLenPx : 0;
+    const bottomPx = h - (o.paddingBottom + capH + o.paddingXLabelToPlot + xTickLabelHeightPx + xTickOutPx + 4);
+    const x0 = leftPx * pxX - 1;
+    const x1 = rightPx * pxX - 1;
+    const y1 = 1 - topPx * pxY;
+    const y0 = 1 - bottomPx * pxY;
+    return { x0, y0, x1, y1 };
+  }
+  // ---- Save as image / PDF ----
+  async saveAs(format) {
+    this.render();
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    const offscreen = document.createElement("canvas");
+    offscreen.width = w;
+    offscreen.height = h;
+    offscreen.getContext("2d").drawImage(this.canvas, 0, 0);
+    let blob;
+    let filename;
+    if (format === "png") {
+      blob = await new Promise((res) => offscreen.toBlob((b) => res(b), "image/png"));
+      filename = "plot.png";
+    } else if (format === "jpeg") {
+      blob = await new Promise((res) => offscreen.toBlob((b) => res(b), "image/jpeg", 0.92));
+      filename = "plot.jpg";
+    } else {
+      const jpegBlob = await new Promise((res) => offscreen.toBlob((b) => res(b), "image/jpeg", 0.92));
+      const jpegBytes = new Uint8Array(await jpegBlob.arrayBuffer());
+      blob = this.buildSimplePdf(jpegBytes, w, h);
+      filename = "plot.pdf";
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1e4);
+  }
+  /** Builds a minimal single-page PDF that embeds the supplied JPEG bytes. */
+  buildSimplePdf(jpegBytes, imgW, imgH) {
+    const enc = new TextEncoder();
+    const e = (s) => enc.encode(s);
+    const contStr = `q ${imgW} 0 0 ${imgH} 0 0 cm /Im0 Do Q
 `;
-        const contBytes = e(contStr);
-        const parts = [];
-        const xref = [0];
-        let pos = 0;
-        const add = (...chunks) => {
-          for (const c of chunks) {
-            parts.push(c);
-            pos += c.byteLength;
-          }
-        };
-        add(e("%PDF-1.4\n"));
-        xref.push(pos);
-        add(e("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"));
-        xref.push(pos);
-        add(e("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"));
-        xref.push(pos);
-        add(e(`3 0 obj
+    const contBytes = e(contStr);
+    const parts = [];
+    const xref = [0];
+    let pos = 0;
+    const add = (...chunks) => {
+      for (const c of chunks) {
+        parts.push(c);
+        pos += c.byteLength;
+      }
+    };
+    add(e("%PDF-1.4\n"));
+    xref.push(pos);
+    add(e("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"));
+    xref.push(pos);
+    add(e("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"));
+    xref.push(pos);
+    add(e(`3 0 obj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 ${imgW} ${imgH}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>
 endobj
 `));
-        xref.push(pos);
-        add(
-          e(`4 0 obj
+    xref.push(pos);
+    add(
+      e(`4 0 obj
 << /Type /XObject /Subtype /Image /Width ${imgW} /Height ${imgH} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.byteLength} >>
 stream
 `),
-          jpegBytes,
-          e("\nendstream\nendobj\n")
-        );
-        xref.push(pos);
-        add(
-          e(`5 0 obj
+      jpegBytes,
+      e("\nendstream\nendobj\n")
+    );
+    xref.push(pos);
+    add(
+      e(`5 0 obj
 << /Length ${contBytes.byteLength} >>
 stream
 `),
-          contBytes,
-          e("endstream\nendobj\n")
-        );
-        const xrefPos = pos;
-        const xrefSect = xref.map(
-          (o, i) => i === 0 ? "0000000000 65535 f \n" : `${String(o).padStart(10, "0")} 00000 n 
+      contBytes,
+      e("endstream\nendobj\n")
+    );
+    const xrefPos = pos;
+    const xrefSect = xref.map(
+      (o, i) => i === 0 ? "0000000000 65535 f \n" : `${String(o).padStart(10, "0")} 00000 n 
 `
-        ).join("");
-        add(e(`xref
+    ).join("");
+    add(e(`xref
 0 ${xref.length}
 ${xrefSect}trailer
 << /Size ${xref.length} /Root 1 0 R >>
@@ -14542,780 +14501,772 @@ startxref
 ${xrefPos}
 %%EOF
 `));
-        const total = parts.reduce((s, p) => s + p.byteLength, 0);
-        const pdf = new Uint8Array(total);
-        let offset = 0;
-        for (const p of parts) {
-          pdf.set(p, offset);
-          offset += p.byteLength;
-        }
-        return new Blob([pdf], { type: "application/pdf" });
+    const total = parts.reduce((s, p) => s + p.byteLength, 0);
+    const pdf = new Uint8Array(total);
+    let offset = 0;
+    for (const p of parts) {
+      pdf.set(p, offset);
+      offset += p.byteLength;
+    }
+    return new Blob([pdf], { type: "application/pdf" });
+  }
+  // ---- Main render ----
+  /** Schedules a render on the next animation frame, deduplicating multiple calls per frame. */
+  scheduleRender() {
+    if (this.rafPending) return;
+    this.rafPending = true;
+    requestAnimationFrame(() => {
+      this.rafPending = false;
+      this.render();
+    });
+  }
+  render() {
+    if (!this.device) return;
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+    if (w === 0 || h === 0) return;
+    this.canvas.width = w;
+    this.canvas.height = h;
+    const ssaaTexture = this.device.createTexture({
+      size: [w * this.ssaaScale, h * this.ssaaScale],
+      format: this.canvasFormat,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+    });
+    const pixelX = 2 / w;
+    const pixelY = 2 / h;
+    const o = this.opts;
+    const font = this.font;
+    const fs = o.fontSize;
+    const titleFs = o.titleFontSize;
+    const xSpan = this.viewXMax - this.viewXMin;
+    const ySpan = this.viewYMax - this.viewYMin;
+    const xSpanChanged = this.lastXSpan < 0 || Math.abs(xSpan - this.lastXSpan) / this.lastXSpan > 1e-9;
+    const ySpanChanged = this.lastYSpan < 0 || Math.abs(ySpan - this.lastYSpan) / this.lastYSpan > 1e-9;
+    let xTicks;
+    let yTicks;
+    if (this.xLabels) {
+      xTicks = categoricalTicks(this.viewXMin, this.viewXMax);
+    } else if (this.xIsDate) {
+      if (xSpanChanged) {
+        this.xTickStep = getDateTickStep(xSpan);
+        this.lastXSpan = xSpan;
       }
-      // ---- Main render ----
-      /** Schedules a render on the next animation frame, deduplicating multiple calls per frame. */
-      scheduleRender() {
-        if (this.rafPending) return;
-        this.rafPending = true;
-        requestAnimationFrame(() => {
-          this.rafPending = false;
-          this.render();
-        });
+      xTicks = dateTicksFromStep(this.viewXMin, this.viewXMax, this.xTickStep);
+    } else {
+      if (xSpanChanged) {
+        this.xTickStep = getTickStep(this.viewXMin, this.viewXMax);
+        this.lastXSpan = xSpan;
       }
-      render() {
-        if (!this.device) return;
-        const w = this.canvas.clientWidth;
-        const h = this.canvas.clientHeight;
-        if (w === 0 || h === 0) return;
-        this.canvas.width = w;
-        this.canvas.height = h;
-        const ssaaTexture = this.device.createTexture({
-          size: [w * this.ssaaScale, h * this.ssaaScale],
-          format: this.canvasFormat,
-          usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
-        });
-        const pixelX = 2 / w;
-        const pixelY = 2 / h;
-        const o = this.opts;
-        const font = this.font;
-        const fs = o.fontSize;
-        const titleFs = o.titleFontSize;
-        const xSpan = this.viewXMax - this.viewXMin;
-        const ySpan = this.viewYMax - this.viewYMin;
-        const xSpanChanged = this.lastXSpan < 0 || Math.abs(xSpan - this.lastXSpan) / this.lastXSpan > 1e-9;
-        const ySpanChanged = this.lastYSpan < 0 || Math.abs(ySpan - this.lastYSpan) / this.lastYSpan > 1e-9;
-        let xTicks;
-        let yTicks;
-        if (this.xLabels) {
-          xTicks = categoricalTicks(this.viewXMin, this.viewXMax);
-        } else if (this.xIsDate) {
-          if (xSpanChanged) {
-            this.xTickStep = getDateTickStep(xSpan);
-            this.lastXSpan = xSpan;
-          }
-          xTicks = dateTicksFromStep(this.viewXMin, this.viewXMax, this.xTickStep);
+      xTicks = ticksFromStep(this.viewXMin, this.viewXMax, this.xTickStep);
+    }
+    if (this.yLabels) {
+      yTicks = categoricalTicks(this.viewYMin, this.viewYMax);
+    } else if (this.yIsDate) {
+      if (ySpanChanged) {
+        this.yTickStep = getDateTickStep(ySpan);
+        this.lastYSpan = ySpan;
+      }
+      yTicks = dateTicksFromStep(this.viewYMin, this.viewYMax, this.yTickStep);
+    } else {
+      if (ySpanChanged) {
+        this.yTickStep = getTickStep(this.viewYMin, this.viewYMax);
+        this.lastYSpan = ySpan;
+      }
+      yTicks = ticksFromStep(this.viewYMin, this.viewYMax, this.yTickStep);
+    }
+    const fmtX = (v) => this.xLabels ? this.xLabels[Math.round(v)] ?? "" : this.xIsDate ? formatDateTick(v, this.xTickStep) : formatTick(v);
+    const fmtY = (v) => this.yLabels ? this.yLabels[Math.round(v)] ?? "" : this.yIsDate ? formatDateTick(v, this.yTickStep) : formatTick(v);
+    const yTickMaxWidthPx = yTicks.reduce((max, tick) => {
+      const wClip = textWidthClip(fmtY(tick), font, fs, w);
+      return Math.max(max, wClip * w / 2);
+    }, fs * 0.6);
+    let pr = this.computePlotRect(w, h, yTickMaxWidthPx);
+    if (this.opts.style.aspectRatio === "equal") {
+      const xSpanAR = this.viewXMax - this.viewXMin;
+      const ySpanAR = this.viewYMax - this.viewYMin;
+      if (xSpanAR > 0 && ySpanAR > 0) {
+        const plotWpx = (pr.x1 - pr.x0) * w / 2;
+        const plotHpx = (pr.y1 - pr.y0) * h / 2;
+        const pxPerUnitX = plotWpx / xSpanAR;
+        const pxPerUnitY = plotHpx / ySpanAR;
+        if (pxPerUnitX > pxPerUnitY) {
+          const newWpx = pxPerUnitY * xSpanAR;
+          const cx = (pr.x0 + pr.x1) / 2;
+          pr = { ...pr, x0: cx - newWpx / w, x1: cx + newWpx / w };
         } else {
-          if (xSpanChanged) {
-            this.xTickStep = getTickStep(this.viewXMin, this.viewXMax);
-            this.lastXSpan = xSpan;
-          }
-          xTicks = ticksFromStep(this.viewXMin, this.viewXMax, this.xTickStep);
+          const newHpx = pxPerUnitX * ySpanAR;
+          const cy = (pr.y0 + pr.y1) / 2;
+          pr = { ...pr, y0: cy - newHpx / h, y1: cy + newHpx / h };
         }
-        if (this.yLabels) {
-          yTicks = categoricalTicks(this.viewYMin, this.viewYMax);
-        } else if (this.yIsDate) {
-          if (ySpanChanged) {
-            this.yTickStep = getDateTickStep(ySpan);
-            this.lastYSpan = ySpan;
-          }
-          yTicks = dateTicksFromStep(this.viewYMin, this.viewYMax, this.yTickStep);
-        } else {
-          if (ySpanChanged) {
-            this.yTickStep = getTickStep(this.viewYMin, this.viewYMax);
-            this.lastYSpan = ySpan;
-          }
-          yTicks = ticksFromStep(this.viewYMin, this.viewYMax, this.yTickStep);
-        }
-        const fmtX = (v) => this.xLabels ? this.xLabels[Math.round(v)] ?? "" : this.xIsDate ? formatDateTick(v, this.xTickStep) : formatTick(v);
-        const fmtY = (v) => this.yLabels ? this.yLabels[Math.round(v)] ?? "" : this.yIsDate ? formatDateTick(v, this.yTickStep) : formatTick(v);
-        const yTickMaxWidthPx = yTicks.reduce((max, tick) => {
-          const wClip = textWidthClip(fmtY(tick), font, fs, w);
-          return Math.max(max, wClip * w / 2);
-        }, fs * 0.6);
-        let pr = this.computePlotRect(w, h, yTickMaxWidthPx);
-        if (this.opts.style.aspectRatio === "equal") {
-          const xSpanAR = this.viewXMax - this.viewXMin;
-          const ySpanAR = this.viewYMax - this.viewYMin;
-          if (xSpanAR > 0 && ySpanAR > 0) {
-            const plotWpx = (pr.x1 - pr.x0) * w / 2;
-            const plotHpx = (pr.y1 - pr.y0) * h / 2;
-            const pxPerUnitX = plotWpx / xSpanAR;
-            const pxPerUnitY = plotHpx / ySpanAR;
-            if (pxPerUnitX > pxPerUnitY) {
-              const newWpx = pxPerUnitY * xSpanAR;
-              const cx = (pr.x0 + pr.x1) / 2;
-              pr = { ...pr, x0: cx - newWpx / w, x1: cx + newWpx / w };
-            } else {
-              const newHpx = pxPerUnitX * ySpanAR;
-              const cy = (pr.y0 + pr.y1) / 2;
-              pr = { ...pr, y0: cy - newHpx / h, y1: cy + newHpx / h };
-            }
-          }
-        }
-        this.plotRectX0 = pr.x0;
-        this.plotRectY0 = pr.y0;
-        this.plotRectX1 = pr.x1;
-        this.plotRectY1 = pr.y1;
-        const { x0: rectX0, y0: rectY0, x1: rectX1, y1: rectY1 } = pr;
-        const style = this.opts.style;
-        const [cr, cg, cb] = style.axisColor;
-        const verts = [];
-        const textVerts = [];
-        const titleVerts = [];
-        const [bgR, bgG, bgB] = style.background.panelColor;
-        const bgVerts = [
-          rectX0,
-          rectY0,
-          bgR,
-          bgG,
-          bgB,
-          rectX1,
-          rectY0,
-          bgR,
-          bgG,
-          bgB,
-          rectX1,
-          rectY1,
-          bgR,
-          bgG,
-          bgB,
-          rectX0,
-          rectY0,
-          bgR,
-          bgG,
-          bgB,
-          rectX1,
-          rectY1,
-          bgR,
-          bgG,
-          bgB,
-          rectX0,
-          rectY1,
-          bgR,
-          bgG,
-          bgB
-        ];
-        const lineWidth = 2;
-        for (let i = 0; i < lineWidth; i++) {
-          const bx0 = rectX0 + pixelX * i, by0 = rectY0 + pixelY * i;
-          const bx1 = rectX1 - pixelX * i, by1 = rectY1 - pixelY * i;
-          const ex = pixelX * 0.5;
-          verts.push(bx0 - ex, by0, cr, cg, cb, bx1 + ex, by0, cr, cg, cb);
-          verts.push(bx0 - ex, by1, cr, cg, cb, bx1 + ex, by1, cr, cg, cb);
-          verts.push(bx0, by0, cr, cg, cb, bx0, by1, cr, cg, cb);
-          verts.push(bx1, by0, cr, cg, cb, bx1, by1, cr, cg, cb);
-        }
-        const dataToClipX = (x) => rectX0 + (x - this.viewXMin) / (this.viewXMax - this.viewXMin) * (rectX1 - rectX0);
-        const dataToClipY = (y) => rectY0 + (y - this.viewYMin) / (this.viewYMax - this.viewYMin) * (rectY1 - rectY0);
-        const tickLenX = pixelX * 8;
-        const tickLenY = pixelY * 8;
-        const tickDir = style.tickDirection;
-        const xTickIn = tickDir === "in" || tickDir === "both" ? tickLenY : 0;
-        const xTickOut = tickDir === "out" || tickDir === "both" ? -tickLenY : 0;
-        const yTickIn = tickDir === "in" || tickDir === "both" ? tickLenX : 0;
-        const yTickOut = tickDir === "out" || tickDir === "both" ? -tickLenX : 0;
-        const xLabelOffsetPx = tickDir === "in" ? 4 : 8 + 4;
-        const yLabelOffsetPx = tickDir === "in" ? 4 : 8 + 4;
-        if (style.grid.show) {
-          const [gridR, gridG, gridB] = style.grid.color;
-          for (const tick of xTicks) {
-            const tx = dataToClipX(tick);
-            verts.push(tx, rectY0, gridR, gridG, gridB, tx, rectY1, gridR, gridG, gridB);
-          }
-          for (const tick of yTicks) {
-            const ty = dataToClipY(tick);
-            verts.push(rectX0, ty, gridR, gridG, gridB, rectX1, ty, gridR, gridG, gridB);
-          }
-        }
-        for (const tick of xTicks) {
-          const tx = dataToClipX(tick);
-          verts.push(tx, rectY0 + xTickOut, cr, cg, cb, tx, rectY0 + xTickIn, cr, cg, cb);
-          const label = fmtX(tick);
-          const lw = textWidthClip(label, font, fs, w);
-          textVerts.push(...textToTriVerts(
-            label,
-            font,
-            tx - lw / 2,
-            rectY0 - pixelY * (fs * 0.75 + xLabelOffsetPx),
-            fs,
-            w,
-            h,
-            cr,
-            cg,
-            cb
-          ));
-        }
-        for (const tick of yTicks) {
-          const ty = dataToClipY(tick);
-          verts.push(rectX0 + yTickOut, ty, cr, cg, cb, rectX0 + yTickIn, ty, cr, cg, cb);
-          const label = fmtY(tick);
-          const lw = textWidthClip(label, font, fs, w);
-          textVerts.push(...textToTriVerts(
-            label,
-            font,
-            rectX0 - lw - pixelX * yLabelOffsetPx,
-            ty - pixelY * fs * 0.35,
-            fs,
-            w,
-            h,
-            cr,
-            cg,
-            cb
-          ));
-        }
-        const MAX2 = this.MAX_COMPUTE_SEGS;
-        const MAX_DASHED = 5e3;
-        for (let si = 0; si < this.internalSeries.length; si++) {
-          const series = this.internalSeries[si];
-          const pattern = DASH_PATTERNS[series.lineStyle ?? "-"] ?? [];
-          const isSolid = pattern.length === 0;
-          const [dr, dg, db] = series.color ?? [0, 0.447, 0.741];
-          const seriesAlpha = series.color?.[3] ?? 1;
-          if (!isSolid) {
-            const dParamBuf = this.dashedParamBufs[si];
-            if (!dParamBuf) {
-              this.dashedNumSegs[si] = 0;
-              continue;
-            }
-            const n2 = series.x.length;
-            if (n2 < 2) {
-              this.dashedNumSegs[si] = 0;
-              continue;
-            }
-            let startI2 = 0, endI2 = n2 - 1;
-            if (series.xSorted) {
-              let lo = 0, hi = n2;
-              while (lo < hi) {
-                const mid = lo + hi >> 1;
-                if (series.x[mid] < this.viewXMin) lo = mid + 1;
-                else hi = mid;
-              }
-              startI2 = Math.max(0, lo - 1);
-              lo = 0;
-              hi = n2;
-              while (lo < hi) {
-                const mid = lo + hi >> 1;
-                if (series.x[mid] <= this.viewXMax) lo = mid + 1;
-                else hi = mid;
-              }
-              endI2 = Math.min(n2 - 1, lo);
-            }
-            const visibleSegs2 = endI2 - startI2;
-            const stride2 = Math.max(1, Math.ceil(visibleSegs2 / MAX_DASHED));
-            const numSegs2 = Math.ceil(visibleSegs2 / stride2);
-            this.dashedNumSegs[si] = numSegs2;
-            const patPadded = new Float32Array(8);
-            for (let k = 0; k < pattern.length; k++) patPadded[k] = pattern[k];
-            const dAB = new ArrayBuffer(128);
-            const df = new Float32Array(dAB);
-            const du = new Uint32Array(dAB);
-            df[0] = this.viewXMin;
-            df[1] = this.viewXMax;
-            df[2] = this.viewYMin;
-            df[3] = this.viewYMax;
-            df[4] = rectX0;
-            df[5] = rectX1;
-            df[6] = rectY0;
-            df[7] = rectY1;
-            df[8] = w;
-            df[9] = h;
-            df[10] = (series.lineWidth ?? 1) / 2;
-            df[11] = dr;
-            df[12] = dg;
-            df[13] = db;
-            df[14] = seriesAlpha;
-            du[16] = startI2;
-            du[17] = stride2;
-            du[18] = numSegs2;
-            du[19] = this.MAX_DASHED_OUT_QUADS;
-            du[20] = pattern.length;
-            df.set(patPadded, 24);
-            this.device.queue.writeBuffer(dParamBuf, 0, dAB);
-            this.seriesOutCounts[si] = 0;
-            continue;
-          }
-          const n = series.x.length;
-          if (n < 2 || !this.seriesParamBufs[si]) {
-            this.seriesOutCounts[si] = 0;
-            continue;
-          }
-          let startI = 0, endI = n - 1;
-          if (series.xSorted) {
-            let lo = 0, hi = n;
-            while (lo < hi) {
-              const mid = lo + hi >> 1;
-              if (series.x[mid] < this.viewXMin) lo = mid + 1;
-              else hi = mid;
-            }
-            startI = Math.max(0, lo - 1);
-            lo = 0;
-            hi = n;
-            while (lo < hi) {
-              const mid = lo + hi >> 1;
-              if (series.x[mid] <= this.viewXMax) lo = mid + 1;
-              else hi = mid;
-            }
-            endI = Math.min(n - 1, lo);
-          }
-          const visibleSegs = endI - startI;
-          const stride = Math.max(1, Math.ceil(visibleSegs / MAX2));
-          const numSegs = Math.ceil(visibleSegs / stride);
-          this.seriesOutCounts[si] = numSegs * 6;
-          const paramAB = new ArrayBuffer(80);
-          const pf = new Float32Array(paramAB);
-          const pu = new Uint32Array(paramAB);
-          pf[0] = this.viewXMin;
-          pf[1] = this.viewXMax;
-          pf[2] = this.viewYMin;
-          pf[3] = this.viewYMax;
-          pf[4] = rectX0;
-          pf[5] = rectX1;
-          pf[6] = rectY0;
-          pf[7] = rectY1;
-          pf[8] = w;
-          pf[9] = h;
-          pf[10] = (series.lineWidth ?? 1) / 2;
-          pf[11] = dr;
-          pf[12] = dg;
-          pf[13] = db;
-          pf[14] = seriesAlpha;
-          pu[16] = startI;
-          pu[17] = stride;
-          pu[18] = numSegs;
-          this.device.queue.writeBuffer(this.seriesParamBufs[si], 0, paramAB);
-        }
-        for (let si = 0; si < this.internalSeries.length; si++) {
-          const series = this.internalSeries[si];
-          const mkStyle = series.marker;
-          if (!mkStyle || mkStyle.shape === "none" || !this.markerParamBufs[si]) {
-            this.markerOutCounts[si] = 0;
-            continue;
-          }
-          const n = series.x.length;
-          if (n === 0) {
-            this.markerOutCounts[si] = 0;
-            continue;
-          }
-          const [dr, dg, db] = series.color ?? [0, 0.447, 0.741];
-          const seriesAlpha = series.color?.[3] ?? 1;
-          const [fr, fg, fb] = mkStyle.faceColor ?? [dr, dg, db];
-          const faceA = mkStyle.faceColor === null ? 0 : mkStyle.faceColor[3] ?? 1;
-          const [er, eg, eb] = mkStyle.edgeColor ?? [dr, dg, db];
-          const edgeA = mkStyle.edgeColor === null ? seriesAlpha : mkStyle.edgeColor[3] ?? 1;
-          const outerR = mkStyle.size / 2;
-          const ew = mkStyle.edgeWidth;
-          const innerR = mkStyle.faceColor === null ? -Math.max(0, outerR - ew) : Math.max(0, outerR - ew);
-          let startI = 0, endI = n - 1;
-          if (series.xSorted) {
-            let lo = 0, hi = n;
-            while (lo < hi) {
-              const mid = lo + hi >> 1;
-              if (series.x[mid] < this.viewXMin) lo = mid + 1;
-              else hi = mid;
-            }
-            startI = Math.max(0, lo - 1);
-            lo = 0;
-            hi = n;
-            while (lo < hi) {
-              const mid = lo + hi >> 1;
-              if (series.x[mid] <= this.viewXMax) lo = mid + 1;
-              else hi = mid;
-            }
-            endI = Math.min(n - 1, lo);
-          }
-          const visiblePts = endI - startI + 1;
-          const MAX_M = this.MAX_MARKER_COUNT;
-          const stride = Math.max(1, Math.ceil(visiblePts / MAX_M));
-          const numPts = Math.ceil(visiblePts / stride);
-          this.markerOutCounts[si] = numPts * 6;
-          const SHAPE_IDS = {
-            "o": 0,
-            "+": 1,
-            "*": 2,
-            ".": 3,
-            "x": 4,
-            "_": 5,
-            "|": 6,
-            "square": 7,
-            "diamond": 8,
-            "^": 9,
-            "v": 10,
-            ">": 11,
-            "<": 12,
-            "pentagram": 13,
-            "hexagram": 14
-          };
-          const shapeId = SHAPE_IDS[mkStyle.shape] ?? 0;
-          const mAB = new ArrayBuffer(112);
-          const mf = new Float32Array(mAB);
-          const mu = new Uint32Array(mAB);
-          mf[0] = this.viewXMin;
-          mf[1] = this.viewXMax;
-          mf[2] = this.viewYMin;
-          mf[3] = this.viewYMax;
-          mf[4] = rectX0;
-          mf[5] = rectX1;
-          mf[6] = rectY0;
-          mf[7] = rectY1;
-          mf[8] = w;
-          mf[9] = h;
-          mf[10] = this.ssaaScale;
-          mf[11] = outerR;
-          mf[12] = innerR;
-          mf[13] = fr;
-          mf[14] = fg;
-          mf[15] = fb;
-          mf[16] = faceA;
-          mf[17] = er;
-          mf[18] = eg;
-          mf[19] = eb;
-          mu[20] = startI;
-          mu[21] = stride;
-          mu[22] = numPts;
-          mf[23] = edgeA;
-          mu[24] = shapeId;
-          this.device.queue.writeBuffer(this.markerParamBufs[si], 0, mAB);
-        }
-        const titleText = this.figureOpts.title;
-        if (titleText) {
-          const titleW = textWidthClip(titleText, font, titleFs, w);
-          const titleX = (rectX0 + rectX1) / 2 - titleW / 2;
-          const titleBaselineClip = 1 - (o.paddingTop + titleFs * 0.75) * pixelY;
-          const titleY = 1 - o.paddingTop * pixelY;
-          titleVerts.push(...textToTriVerts(
-            titleText,
-            font,
-            titleX,
-            titleY - titleFs * 0.75 * pixelY,
-            titleFs,
-            w,
-            h,
-            cr,
-            cg,
-            cb
-          ));
-          void titleBaselineClip;
-        }
-        const xAxisLabel = this.figureOpts.xlabel;
-        if (xAxisLabel) {
-          const lw = textWidthClip(xAxisLabel, font, fs, w);
-          const lx = (rectX0 + rectX1) / 2 - lw / 2;
-          const baselinePxFromTop = h - o.paddingBottom;
-          const ly = 1 - baselinePxFromTop * pixelY;
-          textVerts.push(...textToTriVerts(xAxisLabel, font, lx, ly, fs, w, h, cr, cg, cb));
-        }
-        const yAxisLabel = this.figureOpts.ylabel;
-        if (yAxisLabel) {
-          const scalePx = fs / font.unitsPerEm;
-          const sfX = 2 / w;
-          const sfY = 2 / h;
-          const pxVerts = [];
-          let penPx = 0;
-          for (const char of yAxisLabel) {
-            const glyph = font.charToGlyph(char);
-            const path = glyph.getPath(0, 0, fs);
-            const triXY = glyphToTriangles(path);
-            for (let i = 0; i < triXY.length; i += 2) {
-              pxVerts.push(triXY[i] + penPx, triXY[i + 1], cr, cg, cb);
-            }
-            penPx += (glyph.advanceWidth ?? 0) * scalePx;
-          }
-          const labelWPx = penPx;
-          for (let i = 0; i < pxVerts.length; i += 5) pxVerts[i] - labelWPx / 2;
-          const yLabelCenterClipY = (rectY0 + rectY1) / 2;
-          const yLabelCenterClipX = -1 + (o.paddingLeft + fs * 0.75 / 2) * pixelX;
-          for (let i = 0; i < pxVerts.length; i += 5) {
-            const px = pxVerts[i] - labelWPx / 2;
-            const py = pxVerts[i + 1];
-            textVerts.push(
-              py * sfX + yLabelCenterClipX,
-              px * sfY + yLabelCenterClipY,
-              cr,
-              cg,
-              cb
-            );
-          }
-        }
-        const mkBuf = (data, label) => {
-          const buf = this.device.createBuffer({
-            label,
-            size: Math.max(data.byteLength, 4),
-            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-          });
-          if (data.byteLength > 0) this.device.queue.writeBuffer(buf, 0, data.buffer, data.byteOffset, data.byteLength);
-          return buf;
-        };
-        const bgBuf = mkBuf(new Float32Array(bgVerts), "Panel BG verts");
-        const vertexBuf = mkBuf(new Float32Array(verts), "Line verts");
-        const textBuf = mkBuf(new Float32Array(textVerts), "Text verts");
-        const titleBuf = mkBuf(new Float32Array(titleVerts), "Title verts");
-        const W = w * this.ssaaScale, H = h * this.ssaaScale;
-        const sci_x = Math.ceil((rectX0 + 1) / 2 * W);
-        const sci_y = Math.ceil((1 - rectY1) / 2 * H);
-        const sci_w = Math.floor((rectX1 + 1) / 2 * W) - sci_x;
-        const sci_h = Math.floor((1 - rectY0) / 2 * H) - sci_y;
-        const encoder = this.device.createCommandEncoder();
-        for (let si = 0; si < this.internalSeries.length; si++) {
-          const numSegs = (this.seriesOutCounts[si] ?? 0) / 6;
-          if (numSegs <= 0 || !this.seriesParamBufs[si]) continue;
-          const pattern = DASH_PATTERNS[this.internalSeries[si].lineStyle ?? "-"] ?? [];
-          if (pattern.length !== 0) continue;
-          const bindGroup = this.device.createBindGroup({
-            layout: this.computePipeline.getBindGroupLayout(0),
-            entries: [
-              { binding: 0, resource: { buffer: this.seriesParamBufs[si] } },
-              { binding: 1, resource: { buffer: this.seriesRawBufs[si] } },
-              { binding: 2, resource: { buffer: this.seriesOutBufs[si] } }
-            ]
-          });
-          const computePass = encoder.beginComputePass();
-          computePass.setPipeline(this.computePipeline);
-          computePass.setBindGroup(0, bindGroup);
-          computePass.dispatchWorkgroups(Math.ceil(numSegs / 64));
-          computePass.end();
-        }
-        for (let si = 0; si < this.internalSeries.length; si++) {
-          const numPts = (this.markerOutCounts[si] ?? 0) / 6;
-          if (numPts <= 0 || !this.markerParamBufs[si] || !this.markerOutBufs[si]) continue;
-          const bindGroup = this.device.createBindGroup({
-            layout: this.markerComputePipeline.getBindGroupLayout(0),
-            entries: [
-              { binding: 0, resource: { buffer: this.markerParamBufs[si] } },
-              { binding: 1, resource: { buffer: this.seriesRawBufs[si] } },
-              { binding: 2, resource: { buffer: this.markerOutBufs[si] } }
-            ]
-          });
-          const mPass = encoder.beginComputePass();
-          mPass.setPipeline(this.markerComputePipeline);
-          mPass.setBindGroup(0, bindGroup);
-          mPass.dispatchWorkgroups(Math.ceil(numPts / 64));
-          mPass.end();
-        }
-        for (let si = 0; si < this.internalSeries.length; si++) {
-          const numSegs = this.dashedNumSegs[si] ?? 0;
-          const dParamBuf = this.dashedParamBufs[si];
-          const dOutBuf = this.dashedOutBufs[si];
-          const dDrawArgsBuf = this.dashedDrawArgsBufs[si];
-          if (numSegs <= 0 || !dParamBuf || !dOutBuf || !dDrawArgsBuf) continue;
-          const dBindGroup = this.device.createBindGroup({
-            layout: this.dashedComputePipeline.getBindGroupLayout(0),
-            entries: [
-              { binding: 0, resource: { buffer: dParamBuf } },
-              { binding: 1, resource: { buffer: this.seriesRawBufs[si] } },
-              { binding: 2, resource: { buffer: dOutBuf } },
-              { binding: 3, resource: { buffer: dDrawArgsBuf } }
-            ]
-          });
-          const dPass = encoder.beginComputePass();
-          dPass.setPipeline(this.dashedComputePipeline);
-          dPass.setBindGroup(0, dBindGroup);
-          dPass.dispatchWorkgroups(1);
-          dPass.end();
-        }
-        const renderPass = encoder.beginRenderPass({
-          colorAttachments: [{
-            view: ssaaTexture.createView(),
-            loadOp: "clear",
-            clearValue: { r: style.background.figureColor[0], g: style.background.figureColor[1], b: style.background.figureColor[2], a: 1 },
-            storeOp: "store"
-          }]
-        });
-        renderPass.setPipeline(this.textPipeline);
-        renderPass.setVertexBuffer(0, bgBuf);
-        renderPass.draw(bgVerts.length / 5);
-        renderPass.setPipeline(this.linePipeline);
-        renderPass.setVertexBuffer(0, vertexBuf);
-        renderPass.draw(verts.length / 5);
-        renderPass.setScissorRect(sci_x, sci_y, sci_w, sci_h);
-        renderPass.setPipeline(this.seriesLinePipeline);
-        for (let si = 0; si < this.internalSeries.length; si++) {
-          const vertCount = this.seriesOutCounts[si] ?? 0;
-          if (vertCount <= 0 || !this.seriesOutBufs[si]) continue;
-          const pattern = DASH_PATTERNS[this.internalSeries[si].lineStyle ?? "-"] ?? [];
-          if (pattern.length !== 0) continue;
-          renderPass.setVertexBuffer(0, this.seriesOutBufs[si]);
-          renderPass.draw(vertCount);
-        }
-        for (let si = 0; si < this.internalSeries.length; si++) {
-          const dOutBuf = this.dashedOutBufs[si];
-          const dDrawArgsBuf = this.dashedDrawArgsBufs[si];
-          if (!dOutBuf || !dDrawArgsBuf) continue;
-          renderPass.setVertexBuffer(0, dOutBuf);
-          renderPass.drawIndirect(dDrawArgsBuf, 0);
-        }
-        renderPass.setPipeline(this.markerRenderPipeline);
-        for (let si = 0; si < this.internalSeries.length; si++) {
-          const vertCount = this.markerOutCounts[si] ?? 0;
-          if (vertCount <= 0 || !this.markerOutBufs[si]) continue;
-          renderPass.setVertexBuffer(0, this.markerOutBufs[si]);
-          renderPass.draw(vertCount);
-        }
-        renderPass.setScissorRect(0, 0, W, H);
-        if (textVerts.length > 0) {
-          renderPass.setPipeline(this.textPipeline);
-          renderPass.setVertexBuffer(0, textBuf);
-          renderPass.draw(textVerts.length / 5);
-        }
-        if (titleVerts.length > 0) {
-          renderPass.setPipeline(this.titlePipeline);
-          renderPass.setVertexBuffer(0, titleBuf);
-          renderPass.draw(titleVerts.length / 5);
-        }
-        renderPass.end();
-        const blitBindGroup = this.device.createBindGroup({
-          layout: this.blitPipeline.getBindGroupLayout(0),
-          entries: [
-            { binding: 0, resource: this.blitSampler },
-            { binding: 1, resource: ssaaTexture.createView() }
-          ]
-        });
-        const blitPass = encoder.beginRenderPass({
-          colorAttachments: [{
-            view: this.context.getCurrentTexture().createView(),
-            loadOp: "clear",
-            clearValue: { r: 0, g: 0, b: 0, a: 1 },
-            storeOp: "store"
-          }]
-        });
-        blitPass.setPipeline(this.blitPipeline);
-        blitPass.setBindGroup(0, blitBindGroup);
-        blitPass.draw(6);
-        blitPass.end();
-        this.device.queue.submit([encoder.finish()]);
-        ssaaTexture.destroy();
-        bgBuf.destroy();
-        vertexBuf.destroy();
-        textBuf.destroy();
-        titleBuf.destroy();
       }
+    }
+    this.plotRectX0 = pr.x0;
+    this.plotRectY0 = pr.y0;
+    this.plotRectX1 = pr.x1;
+    this.plotRectY1 = pr.y1;
+    const { x0: rectX0, y0: rectY0, x1: rectX1, y1: rectY1 } = pr;
+    const style = this.opts.style;
+    const [cr, cg, cb] = style.axisColor;
+    const verts = [];
+    const textVerts = [];
+    const titleVerts = [];
+    const [bgR, bgG, bgB] = style.background.panelColor;
+    const bgVerts = [
+      rectX0,
+      rectY0,
+      bgR,
+      bgG,
+      bgB,
+      rectX1,
+      rectY0,
+      bgR,
+      bgG,
+      bgB,
+      rectX1,
+      rectY1,
+      bgR,
+      bgG,
+      bgB,
+      rectX0,
+      rectY0,
+      bgR,
+      bgG,
+      bgB,
+      rectX1,
+      rectY1,
+      bgR,
+      bgG,
+      bgB,
+      rectX0,
+      rectY1,
+      bgR,
+      bgG,
+      bgB
+    ];
+    const lineWidth = 2;
+    for (let i = 0; i < lineWidth; i++) {
+      const bx0 = rectX0 + pixelX * i, by0 = rectY0 + pixelY * i;
+      const bx1 = rectX1 - pixelX * i, by1 = rectY1 - pixelY * i;
+      const ex = pixelX * 0.5;
+      verts.push(bx0 - ex, by0, cr, cg, cb, bx1 + ex, by0, cr, cg, cb);
+      verts.push(bx0 - ex, by1, cr, cg, cb, bx1 + ex, by1, cr, cg, cb);
+      verts.push(bx0, by0, cr, cg, cb, bx0, by1, cr, cg, cb);
+      verts.push(bx1, by0, cr, cg, cb, bx1, by1, cr, cg, cb);
+    }
+    const dataToClipX = (x) => rectX0 + (x - this.viewXMin) / (this.viewXMax - this.viewXMin) * (rectX1 - rectX0);
+    const dataToClipY = (y) => rectY0 + (y - this.viewYMin) / (this.viewYMax - this.viewYMin) * (rectY1 - rectY0);
+    const tickLenX = pixelX * 8;
+    const tickLenY = pixelY * 8;
+    const tickDir = style.tickDirection;
+    const xTickIn = tickDir === "in" || tickDir === "both" ? tickLenY : 0;
+    const xTickOut = tickDir === "out" || tickDir === "both" ? -tickLenY : 0;
+    const yTickIn = tickDir === "in" || tickDir === "both" ? tickLenX : 0;
+    const yTickOut = tickDir === "out" || tickDir === "both" ? -tickLenX : 0;
+    const xLabelOffsetPx = tickDir === "in" ? 4 : 8 + 4;
+    const yLabelOffsetPx = tickDir === "in" ? 4 : 8 + 4;
+    if (style.grid.show) {
+      const [gridR, gridG, gridB] = style.grid.color;
+      for (const tick of xTicks) {
+        const tx = dataToClipX(tick);
+        verts.push(tx, rectY0, gridR, gridG, gridB, tx, rectY1, gridR, gridG, gridB);
+      }
+      for (const tick of yTicks) {
+        const ty = dataToClipY(tick);
+        verts.push(rectX0, ty, gridR, gridG, gridB, rectX1, ty, gridR, gridG, gridB);
+      }
+    }
+    for (const tick of xTicks) {
+      const tx = dataToClipX(tick);
+      verts.push(tx, rectY0 + xTickOut, cr, cg, cb, tx, rectY0 + xTickIn, cr, cg, cb);
+      const label = fmtX(tick);
+      const lw = textWidthClip(label, font, fs, w);
+      textVerts.push(...textToTriVerts(
+        label,
+        font,
+        tx - lw / 2,
+        rectY0 - pixelY * (fs * 0.75 + xLabelOffsetPx),
+        fs,
+        w,
+        h,
+        cr,
+        cg,
+        cb
+      ));
+    }
+    for (const tick of yTicks) {
+      const ty = dataToClipY(tick);
+      verts.push(rectX0 + yTickOut, ty, cr, cg, cb, rectX0 + yTickIn, ty, cr, cg, cb);
+      const label = fmtY(tick);
+      const lw = textWidthClip(label, font, fs, w);
+      textVerts.push(...textToTriVerts(
+        label,
+        font,
+        rectX0 - lw - pixelX * yLabelOffsetPx,
+        ty - pixelY * fs * 0.35,
+        fs,
+        w,
+        h,
+        cr,
+        cg,
+        cb
+      ));
+    }
+    const MAX2 = this.MAX_COMPUTE_SEGS;
+    const MAX_DASHED = 5e3;
+    for (let si = 0; si < this.internalSeries.length; si++) {
+      const series = this.internalSeries[si];
+      const pattern = DASH_PATTERNS[series.lineStyle ?? "-"] ?? [];
+      const isSolid = pattern.length === 0;
+      const [dr, dg, db] = series.color ?? [0, 0.447, 0.741];
+      const seriesAlpha = series.color?.[3] ?? 1;
+      if (!isSolid) {
+        const dParamBuf = this.dashedParamBufs[si];
+        if (!dParamBuf) {
+          this.dashedNumSegs[si] = 0;
+          continue;
+        }
+        const n2 = series.x.length;
+        if (n2 < 2) {
+          this.dashedNumSegs[si] = 0;
+          continue;
+        }
+        let startI2 = 0, endI2 = n2 - 1;
+        if (series.xSorted) {
+          let lo = 0, hi = n2;
+          while (lo < hi) {
+            const mid = lo + hi >> 1;
+            if (series.x[mid] < this.viewXMin) lo = mid + 1;
+            else hi = mid;
+          }
+          startI2 = Math.max(0, lo - 1);
+          lo = 0;
+          hi = n2;
+          while (lo < hi) {
+            const mid = lo + hi >> 1;
+            if (series.x[mid] <= this.viewXMax) lo = mid + 1;
+            else hi = mid;
+          }
+          endI2 = Math.min(n2 - 1, lo);
+        }
+        const visibleSegs2 = endI2 - startI2;
+        const stride2 = Math.max(1, Math.ceil(visibleSegs2 / MAX_DASHED));
+        const numSegs2 = Math.ceil(visibleSegs2 / stride2);
+        this.dashedNumSegs[si] = numSegs2;
+        const patPadded = new Float32Array(8);
+        for (let k = 0; k < pattern.length; k++) patPadded[k] = pattern[k];
+        const dAB = new ArrayBuffer(128);
+        const df = new Float32Array(dAB);
+        const du = new Uint32Array(dAB);
+        df[0] = this.viewXMin;
+        df[1] = this.viewXMax;
+        df[2] = this.viewYMin;
+        df[3] = this.viewYMax;
+        df[4] = rectX0;
+        df[5] = rectX1;
+        df[6] = rectY0;
+        df[7] = rectY1;
+        df[8] = w;
+        df[9] = h;
+        df[10] = (series.lineWidth ?? 1) / 2;
+        df[11] = dr;
+        df[12] = dg;
+        df[13] = db;
+        df[14] = seriesAlpha;
+        du[16] = startI2;
+        du[17] = stride2;
+        du[18] = numSegs2;
+        du[19] = this.MAX_DASHED_OUT_QUADS;
+        du[20] = pattern.length;
+        df.set(patPadded, 24);
+        this.device.queue.writeBuffer(dParamBuf, 0, dAB);
+        this.seriesOutCounts[si] = 0;
+        continue;
+      }
+      const n = series.x.length;
+      if (n < 2 || !this.seriesParamBufs[si]) {
+        this.seriesOutCounts[si] = 0;
+        continue;
+      }
+      let startI = 0, endI = n - 1;
+      if (series.xSorted) {
+        let lo = 0, hi = n;
+        while (lo < hi) {
+          const mid = lo + hi >> 1;
+          if (series.x[mid] < this.viewXMin) lo = mid + 1;
+          else hi = mid;
+        }
+        startI = Math.max(0, lo - 1);
+        lo = 0;
+        hi = n;
+        while (lo < hi) {
+          const mid = lo + hi >> 1;
+          if (series.x[mid] <= this.viewXMax) lo = mid + 1;
+          else hi = mid;
+        }
+        endI = Math.min(n - 1, lo);
+      }
+      const visibleSegs = endI - startI;
+      const stride = Math.max(1, Math.ceil(visibleSegs / MAX2));
+      const numSegs = Math.ceil(visibleSegs / stride);
+      this.seriesOutCounts[si] = numSegs * 6;
+      const paramAB = new ArrayBuffer(80);
+      const pf = new Float32Array(paramAB);
+      const pu = new Uint32Array(paramAB);
+      pf[0] = this.viewXMin;
+      pf[1] = this.viewXMax;
+      pf[2] = this.viewYMin;
+      pf[3] = this.viewYMax;
+      pf[4] = rectX0;
+      pf[5] = rectX1;
+      pf[6] = rectY0;
+      pf[7] = rectY1;
+      pf[8] = w;
+      pf[9] = h;
+      pf[10] = (series.lineWidth ?? 1) / 2;
+      pf[11] = dr;
+      pf[12] = dg;
+      pf[13] = db;
+      pf[14] = seriesAlpha;
+      pu[16] = startI;
+      pu[17] = stride;
+      pu[18] = numSegs;
+      this.device.queue.writeBuffer(this.seriesParamBufs[si], 0, paramAB);
+    }
+    for (let si = 0; si < this.internalSeries.length; si++) {
+      const series = this.internalSeries[si];
+      const mkStyle = series.marker;
+      if (!mkStyle || mkStyle.shape === "none" || !this.markerParamBufs[si]) {
+        this.markerOutCounts[si] = 0;
+        continue;
+      }
+      const n = series.x.length;
+      if (n === 0) {
+        this.markerOutCounts[si] = 0;
+        continue;
+      }
+      const [dr, dg, db] = series.color ?? [0, 0.447, 0.741];
+      const seriesAlpha = series.color?.[3] ?? 1;
+      const [fr, fg, fb] = mkStyle.faceColor ?? [dr, dg, db];
+      const faceA = mkStyle.faceColor === null ? 0 : mkStyle.faceColor[3] ?? 1;
+      const [er, eg, eb] = mkStyle.edgeColor ?? [dr, dg, db];
+      const edgeA = mkStyle.edgeColor === null ? seriesAlpha : mkStyle.edgeColor[3] ?? 1;
+      const outerR = mkStyle.size / 2;
+      const ew = mkStyle.edgeWidth;
+      const innerR = mkStyle.faceColor === null ? -Math.max(0, outerR - ew) : Math.max(0, outerR - ew);
+      let startI = 0, endI = n - 1;
+      if (series.xSorted) {
+        let lo = 0, hi = n;
+        while (lo < hi) {
+          const mid = lo + hi >> 1;
+          if (series.x[mid] < this.viewXMin) lo = mid + 1;
+          else hi = mid;
+        }
+        startI = Math.max(0, lo - 1);
+        lo = 0;
+        hi = n;
+        while (lo < hi) {
+          const mid = lo + hi >> 1;
+          if (series.x[mid] <= this.viewXMax) lo = mid + 1;
+          else hi = mid;
+        }
+        endI = Math.min(n - 1, lo);
+      }
+      const visiblePts = endI - startI + 1;
+      const MAX_M = this.MAX_MARKER_COUNT;
+      const stride = Math.max(1, Math.ceil(visiblePts / MAX_M));
+      const numPts = Math.ceil(visiblePts / stride);
+      this.markerOutCounts[si] = numPts * 6;
+      const SHAPE_IDS = {
+        "o": 0,
+        "+": 1,
+        "*": 2,
+        ".": 3,
+        "x": 4,
+        "_": 5,
+        "|": 6,
+        "square": 7,
+        "diamond": 8,
+        "^": 9,
+        "v": 10,
+        ">": 11,
+        "<": 12,
+        "pentagram": 13,
+        "hexagram": 14
+      };
+      const shapeId = SHAPE_IDS[mkStyle.shape] ?? 0;
+      const mAB = new ArrayBuffer(112);
+      const mf = new Float32Array(mAB);
+      const mu = new Uint32Array(mAB);
+      mf[0] = this.viewXMin;
+      mf[1] = this.viewXMax;
+      mf[2] = this.viewYMin;
+      mf[3] = this.viewYMax;
+      mf[4] = rectX0;
+      mf[5] = rectX1;
+      mf[6] = rectY0;
+      mf[7] = rectY1;
+      mf[8] = w;
+      mf[9] = h;
+      mf[10] = this.ssaaScale;
+      mf[11] = outerR;
+      mf[12] = innerR;
+      mf[13] = fr;
+      mf[14] = fg;
+      mf[15] = fb;
+      mf[16] = faceA;
+      mf[17] = er;
+      mf[18] = eg;
+      mf[19] = eb;
+      mu[20] = startI;
+      mu[21] = stride;
+      mu[22] = numPts;
+      mf[23] = edgeA;
+      mu[24] = shapeId;
+      this.device.queue.writeBuffer(this.markerParamBufs[si], 0, mAB);
+    }
+    const titleText = this.figureOpts.title;
+    if (titleText) {
+      const titleW = textWidthClip(titleText, font, titleFs, w);
+      const titleX = (rectX0 + rectX1) / 2 - titleW / 2;
+      const titleBaselineClip = 1 - (o.paddingTop + titleFs * 0.75) * pixelY;
+      const titleY = 1 - o.paddingTop * pixelY;
+      titleVerts.push(...textToTriVerts(
+        titleText,
+        font,
+        titleX,
+        titleY - titleFs * 0.75 * pixelY,
+        titleFs,
+        w,
+        h,
+        cr,
+        cg,
+        cb
+      ));
+      void titleBaselineClip;
+    }
+    const xAxisLabel = this.figureOpts.xlabel;
+    if (xAxisLabel) {
+      const lw = textWidthClip(xAxisLabel, font, fs, w);
+      const lx = (rectX0 + rectX1) / 2 - lw / 2;
+      const baselinePxFromTop = h - o.paddingBottom;
+      const ly = 1 - baselinePxFromTop * pixelY;
+      textVerts.push(...textToTriVerts(xAxisLabel, font, lx, ly, fs, w, h, cr, cg, cb));
+    }
+    const yAxisLabel = this.figureOpts.ylabel;
+    if (yAxisLabel) {
+      const scalePx = fs / font.unitsPerEm;
+      const sfX = 2 / w;
+      const sfY = 2 / h;
+      const pxVerts = [];
+      let penPx = 0;
+      for (const char of yAxisLabel) {
+        const glyph = font.charToGlyph(char);
+        const path = glyph.getPath(0, 0, fs);
+        const triXY = glyphToTriangles(path);
+        for (let i = 0; i < triXY.length; i += 2) {
+          pxVerts.push(triXY[i] + penPx, triXY[i + 1], cr, cg, cb);
+        }
+        penPx += (glyph.advanceWidth ?? 0) * scalePx;
+      }
+      const labelWPx = penPx;
+      for (let i = 0; i < pxVerts.length; i += 5) pxVerts[i] - labelWPx / 2;
+      const yLabelCenterClipY = (rectY0 + rectY1) / 2;
+      const yLabelCenterClipX = -1 + (o.paddingLeft + fs * 0.75 / 2) * pixelX;
+      for (let i = 0; i < pxVerts.length; i += 5) {
+        const px = pxVerts[i] - labelWPx / 2;
+        const py = pxVerts[i + 1];
+        textVerts.push(
+          py * sfX + yLabelCenterClipX,
+          px * sfY + yLabelCenterClipY,
+          cr,
+          cg,
+          cb
+        );
+      }
+    }
+    const mkBuf = (data, label) => {
+      const buf = this.device.createBuffer({
+        label,
+        size: Math.max(data.byteLength, 4),
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+      });
+      if (data.byteLength > 0) this.device.queue.writeBuffer(buf, 0, data.buffer, data.byteOffset, data.byteLength);
+      return buf;
     };
-    Plotter = class {
-      opts;
-      font;
-      initialized = false;
-      /**
-       * @param opts  Global styling and layout options.
-       *   - fontSize:            Base font size in px (tick labels, axis labels). Default 14.
-       *   - titleFontSize:       Title font size in px. Default fontSize * 1.4.
-       *   - fontUrl:             URL/path to a TTF/OTF font. Default bundled Roboto.
-       *   - grid:                Show grid lines. Default true.
-       *   - paddingLeft:         px from left canvas edge to left edge of y-axis label. Default 4.
-       *   - paddingYLabelToYTicks: px from right edge of y-axis label to left side of y-tick value text. Default 6.
-       *   - paddingTop:          px from top canvas edge to top of title text. Default 8.
-       *   - paddingTitleToPlot:  px from bottom of title to top of plot area. Default 8.
-       *   - paddingBottom:       px from bottom canvas edge to bottom of x-axis label. Default 4.
-       *   - paddingXLabelToPlot: px from top of x-axis label to bottom of plot area. Default 6.
-       *   - paddingRight:        px from right edge of plot area to right canvas edge. Default 12.
-       */
-      constructor(opts = {}) {
-        const fs = opts.fontSize ?? 16;
-        const style = opts.style ?? matlabStyle();
-        if (opts.grid !== void 0 && opts.style === void 0) {
-          style.grid.show = opts.grid;
-        }
-        this.opts = {
-          fontSize: fs,
-          titleFontSize: opts.titleFontSize ?? Math.round(fs * 1.4),
-          fontUrl: opts.fontUrl ?? "fonts/helvetica/roboto-13281/RobotoRegular-3m4L.ttf",
-          grid: style.grid.show,
-          paddingLeft: opts.paddingLeft ?? 20,
-          paddingYLabelToYTicks: opts.paddingYLabelToYTicks ?? 10,
-          paddingTop: opts.paddingTop ?? 8,
-          paddingTitleToPlot: opts.paddingTitleToPlot ?? 8,
-          paddingBottom: opts.paddingBottom ?? 8,
-          paddingXLabelToPlot: opts.paddingXLabelToPlot ?? 6,
-          paddingRight: opts.paddingRight ?? 20,
-          style
-        };
-      }
-      /** Loads the font. Must be called (and awaited) before figure() / plot(). */
-      async init() {
-        if (this.initialized) return;
-        if (!navigator.gpu) throw new Error("WebGPU not supported");
-        this.font = await load(this.opts.fontUrl);
-        this.initialized = true;
-      }
-      /**
-       * Creates a new plot window and appends it to the given container (default: document.body).
-       * Returns the Figure instance (call render() on it, or use plot() which does it automatically).
-       */
-      async figure(figOpts = {}, container) {
-        if (!this.initialized) await this.init();
-        const fullFigOpts = {
-          title: figOpts.title ?? "",
-          xlabel: figOpts.xlabel ?? "",
-          ylabel: figOpts.ylabel ?? ""
-        };
-        const fig = new Figure(this.opts, fullFigOpts);
-        await fig.init(this.font);
-        (container ?? document.body).appendChild(fig.windowEl);
-        return fig;
-      }
-      /**
-       * Convenience method: creates a figure, sets data, and renders.
-       * @param data   Array of { x, y } points (or PlotSeries for multi-series).
-       * @param figOpts  Figure options (title, xlabel, ylabel).
-       * @param container  DOM element to append the window to. Default: document.body.
-       */
-      async plot(data, figOpts = {}, container) {
-        const fig = await this.figure(figOpts, container);
-        let series;
-        if (data.length === 0) {
-          series = [];
-        } else if ("color" in data[0] || Array.isArray(data[0].x)) {
-          series = data;
-        } else {
-          const pts = data;
-          series = [{ x: pts.map((p) => p.x), y: pts.map((p) => p.y) }];
-        }
-        fig.setData(series);
-        fig.render();
-        return fig;
-      }
+    const bgBuf = mkBuf(new Float32Array(bgVerts), "Panel BG verts");
+    const vertexBuf = mkBuf(new Float32Array(verts), "Line verts");
+    const textBuf = mkBuf(new Float32Array(textVerts), "Text verts");
+    const titleBuf = mkBuf(new Float32Array(titleVerts), "Title verts");
+    const W = w * this.ssaaScale, H = h * this.ssaaScale;
+    const sci_x = Math.ceil((rectX0 + 1) / 2 * W);
+    const sci_y = Math.ceil((1 - rectY1) / 2 * H);
+    const sci_w = Math.floor((rectX1 + 1) / 2 * W) - sci_x;
+    const sci_h = Math.floor((1 - rectY0) / 2 * H) - sci_y;
+    const encoder = this.device.createCommandEncoder();
+    for (let si = 0; si < this.internalSeries.length; si++) {
+      const numSegs = (this.seriesOutCounts[si] ?? 0) / 6;
+      if (numSegs <= 0 || !this.seriesParamBufs[si]) continue;
+      const pattern = DASH_PATTERNS[this.internalSeries[si].lineStyle ?? "-"] ?? [];
+      if (pattern.length !== 0) continue;
+      const bindGroup = this.device.createBindGroup({
+        layout: this.computePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: this.seriesParamBufs[si] } },
+          { binding: 1, resource: { buffer: this.seriesRawBufs[si] } },
+          { binding: 2, resource: { buffer: this.seriesOutBufs[si] } }
+        ]
+      });
+      const computePass = encoder.beginComputePass();
+      computePass.setPipeline(this.computePipeline);
+      computePass.setBindGroup(0, bindGroup);
+      computePass.dispatchWorkgroups(Math.ceil(numSegs / 64));
+      computePass.end();
+    }
+    for (let si = 0; si < this.internalSeries.length; si++) {
+      const numPts = (this.markerOutCounts[si] ?? 0) / 6;
+      if (numPts <= 0 || !this.markerParamBufs[si] || !this.markerOutBufs[si]) continue;
+      const bindGroup = this.device.createBindGroup({
+        layout: this.markerComputePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: this.markerParamBufs[si] } },
+          { binding: 1, resource: { buffer: this.seriesRawBufs[si] } },
+          { binding: 2, resource: { buffer: this.markerOutBufs[si] } }
+        ]
+      });
+      const mPass = encoder.beginComputePass();
+      mPass.setPipeline(this.markerComputePipeline);
+      mPass.setBindGroup(0, bindGroup);
+      mPass.dispatchWorkgroups(Math.ceil(numPts / 64));
+      mPass.end();
+    }
+    for (let si = 0; si < this.internalSeries.length; si++) {
+      const numSegs = this.dashedNumSegs[si] ?? 0;
+      const dParamBuf = this.dashedParamBufs[si];
+      const dOutBuf = this.dashedOutBufs[si];
+      const dDrawArgsBuf = this.dashedDrawArgsBufs[si];
+      if (numSegs <= 0 || !dParamBuf || !dOutBuf || !dDrawArgsBuf) continue;
+      const dBindGroup = this.device.createBindGroup({
+        layout: this.dashedComputePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: dParamBuf } },
+          { binding: 1, resource: { buffer: this.seriesRawBufs[si] } },
+          { binding: 2, resource: { buffer: dOutBuf } },
+          { binding: 3, resource: { buffer: dDrawArgsBuf } }
+        ]
+      });
+      const dPass = encoder.beginComputePass();
+      dPass.setPipeline(this.dashedComputePipeline);
+      dPass.setBindGroup(0, dBindGroup);
+      dPass.dispatchWorkgroups(1);
+      dPass.end();
+    }
+    const renderPass = encoder.beginRenderPass({
+      colorAttachments: [{
+        view: ssaaTexture.createView(),
+        loadOp: "clear",
+        clearValue: { r: style.background.figureColor[0], g: style.background.figureColor[1], b: style.background.figureColor[2], a: 1 },
+        storeOp: "store"
+      }]
+    });
+    renderPass.setPipeline(this.textPipeline);
+    renderPass.setVertexBuffer(0, bgBuf);
+    renderPass.draw(bgVerts.length / 5);
+    renderPass.setPipeline(this.linePipeline);
+    renderPass.setVertexBuffer(0, vertexBuf);
+    renderPass.draw(verts.length / 5);
+    renderPass.setScissorRect(sci_x, sci_y, sci_w, sci_h);
+    renderPass.setPipeline(this.seriesLinePipeline);
+    for (let si = 0; si < this.internalSeries.length; si++) {
+      const vertCount = this.seriesOutCounts[si] ?? 0;
+      if (vertCount <= 0 || !this.seriesOutBufs[si]) continue;
+      const pattern = DASH_PATTERNS[this.internalSeries[si].lineStyle ?? "-"] ?? [];
+      if (pattern.length !== 0) continue;
+      renderPass.setVertexBuffer(0, this.seriesOutBufs[si]);
+      renderPass.draw(vertCount);
+    }
+    for (let si = 0; si < this.internalSeries.length; si++) {
+      const dOutBuf = this.dashedOutBufs[si];
+      const dDrawArgsBuf = this.dashedDrawArgsBufs[si];
+      if (!dOutBuf || !dDrawArgsBuf) continue;
+      renderPass.setVertexBuffer(0, dOutBuf);
+      renderPass.drawIndirect(dDrawArgsBuf, 0);
+    }
+    renderPass.setPipeline(this.markerRenderPipeline);
+    for (let si = 0; si < this.internalSeries.length; si++) {
+      const vertCount = this.markerOutCounts[si] ?? 0;
+      if (vertCount <= 0 || !this.markerOutBufs[si]) continue;
+      renderPass.setVertexBuffer(0, this.markerOutBufs[si]);
+      renderPass.draw(vertCount);
+    }
+    renderPass.setScissorRect(0, 0, W, H);
+    if (textVerts.length > 0) {
+      renderPass.setPipeline(this.textPipeline);
+      renderPass.setVertexBuffer(0, textBuf);
+      renderPass.draw(textVerts.length / 5);
+    }
+    if (titleVerts.length > 0) {
+      renderPass.setPipeline(this.titlePipeline);
+      renderPass.setVertexBuffer(0, titleBuf);
+      renderPass.draw(titleVerts.length / 5);
+    }
+    renderPass.end();
+    const blitBindGroup = this.device.createBindGroup({
+      layout: this.blitPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: this.blitSampler },
+        { binding: 1, resource: ssaaTexture.createView() }
+      ]
+    });
+    const blitPass = encoder.beginRenderPass({
+      colorAttachments: [{
+        view: this.context.getCurrentTexture().createView(),
+        loadOp: "clear",
+        clearValue: { r: 0, g: 0, b: 0, a: 1 },
+        storeOp: "store"
+      }]
+    });
+    blitPass.setPipeline(this.blitPipeline);
+    blitPass.setBindGroup(0, blitBindGroup);
+    blitPass.draw(6);
+    blitPass.end();
+    this.device.queue.submit([encoder.finish()]);
+    ssaaTexture.destroy();
+    bgBuf.destroy();
+    vertexBuf.destroy();
+    textBuf.destroy();
+    titleBuf.destroy();
+  }
+};
+var Plotter = class {
+  opts;
+  font;
+  initialized = false;
+  /**
+   * @param opts  Global styling and layout options.
+   *   - fontSize:            Base font size in px (tick labels, axis labels). Default 14.
+   *   - titleFontSize:       Title font size in px. Default fontSize * 1.4.
+   *   - fontUrl:             URL/path to a TTF/OTF font. Default bundled Roboto.
+   *   - grid:                Show grid lines. Default true.
+   *   - paddingLeft:         px from left canvas edge to left edge of y-axis label. Default 4.
+   *   - paddingYLabelToYTicks: px from right edge of y-axis label to left side of y-tick value text. Default 6.
+   *   - paddingTop:          px from top canvas edge to top of title text. Default 8.
+   *   - paddingTitleToPlot:  px from bottom of title to top of plot area. Default 8.
+   *   - paddingBottom:       px from bottom canvas edge to bottom of x-axis label. Default 4.
+   *   - paddingXLabelToPlot: px from top of x-axis label to bottom of plot area. Default 6.
+   *   - paddingRight:        px from right edge of plot area to right canvas edge. Default 12.
+   */
+  constructor(opts = {}) {
+    const fs = opts.fontSize ?? 16;
+    const style = opts.style ?? matlabStyle();
+    if (opts.grid !== void 0 && opts.style === void 0) {
+      style.grid.show = opts.grid;
+    }
+    this.opts = {
+      fontSize: fs,
+      titleFontSize: opts.titleFontSize ?? Math.round(fs * 1.4),
+      fontUrl: opts.fontUrl ?? "fonts/helvetica/roboto-13281/RobotoRegular-3m4L.ttf",
+      grid: style.grid.show,
+      paddingLeft: opts.paddingLeft ?? 20,
+      paddingYLabelToYTicks: opts.paddingYLabelToYTicks ?? 10,
+      paddingTop: opts.paddingTop ?? 8,
+      paddingTitleToPlot: opts.paddingTitleToPlot ?? 8,
+      paddingBottom: opts.paddingBottom ?? 8,
+      paddingXLabelToPlot: opts.paddingXLabelToPlot ?? 6,
+      paddingRight: opts.paddingRight ?? 20,
+      style
     };
   }
-});
+  /** Loads the font. Must be called (and awaited) before figure() / plot(). */
+  async init() {
+    if (this.initialized) return;
+    if (!navigator.gpu) throw new Error("WebGPU not supported");
+    this.font = await load(this.opts.fontUrl);
+    this.initialized = true;
+  }
+  /**
+   * Creates a new plot window and appends it to the given container (default: document.body).
+   * Returns the Figure instance (call render() on it, or use plot() which does it automatically).
+   */
+  async figure(figOpts = {}, container) {
+    if (!this.initialized) await this.init();
+    const fullFigOpts = {
+      title: figOpts.title ?? "",
+      xlabel: figOpts.xlabel ?? "",
+      ylabel: figOpts.ylabel ?? ""
+    };
+    const fig = new Figure(this.opts, fullFigOpts);
+    await fig.init(this.font);
+    (container ?? document.body).appendChild(fig.windowEl);
+    return fig;
+  }
+  /**
+   * Convenience method: creates a figure, sets data, and renders.
+   * @param data   Array of { x, y } points (or PlotSeries for multi-series).
+   * @param figOpts  Figure options (title, xlabel, ylabel).
+   * @param container  DOM element to append the window to. Default: document.body.
+   */
+  async plot(data, figOpts = {}, container) {
+    const fig = await this.figure(figOpts, container);
+    let series;
+    if (data.length === 0) {
+      series = [];
+    } else if ("color" in data[0] || Array.isArray(data[0].x)) {
+      series = data;
+    } else {
+      const pts = data;
+      series = [{ x: pts.map((p) => p.x), y: pts.map((p) => p.y) }];
+    }
+    fig.setData(series);
+    fig.render();
+    return fig;
+  }
+};
 
 // src/index.ts
-var require_index = __commonJS({
-  "src/index.ts"() {
-    init_plotter();
-    var SHAPES = [
-      { shape: "o", label: "circle", color: [0, 0.45, 0.74] },
-      { shape: "+", label: "plus", color: [0.85, 0.33, 0.1] },
-      { shape: "*", label: "asterisk", color: [0.93, 0.69, 0.13] },
-      { shape: ".", label: "point", color: [0.49, 0.18, 0.56] },
-      { shape: "x", label: "cross", color: [0.47, 0.67, 0.19] },
-      { shape: "_", label: "hline", color: [0.3, 0.75, 0.93] },
-      { shape: "|", label: "vline", color: [0.64, 0.08, 0.18] },
-      { shape: "square", label: "square", color: [0, 0.45, 0.74] },
-      { shape: "diamond", label: "diamond", color: [0.85, 0.33, 0.1] },
-      { shape: "^", label: "up-triangle", color: [0.93, 0.69, 0.13] },
-      { shape: "v", label: "down-triangle", color: [0.49, 0.18, 0.56] },
-      { shape: ">", label: "right-triangle", color: [0.47, 0.67, 0.19] },
-      { shape: "<", label: "left-triangle", color: [0.3, 0.75, 0.93] },
-      { shape: "pentagram", label: "pentagram", color: [0.64, 0.08, 0.18] },
-      { shape: "hexagram", label: "hexagram", color: [0.2, 0.6, 0.4] }
-    ];
-    var N_PTS = 12;
-    var X_VALS = Array.from({ length: N_PTS }, (_, i) => i + 1);
-    async function main() {
-      const container = document.getElementById("plot_container");
-      const plotter = new Plotter();
-      const series = SHAPES.map(({ shape, color }, row) => {
-        const y = SHAPES.length - row;
-        const mk = new MarkerStyle();
-        mk.shape = shape;
-        mk.size = 14;
-        mk.edgeWidth = 1.5;
-        return {
-          x: X_VALS,
-          y: X_VALS.map(() => y),
-          lineStyle: "-",
-          lineWidth: 1,
-          marker: mk,
-          color
-        };
-      });
-      plotter.plot(series, {
-        title: "MATLAB marker shapes",
-        xlabel: "x",
-        ylabel: "series"
-      }, container);
-    }
-    main();
-  }
-});
-export default require_index();
+var SHAPES = [
+  { shape: "o", label: "circle", color: [0, 0.45, 0.74] },
+  // { shape: '+',         label: 'plus',           color: [0.85, 0.33, 0.10] },
+  // { shape: '*',         label: 'asterisk',       color: [0.93, 0.69, 0.13] },
+  // { shape: '.',         label: 'point',          color: [0.49, 0.18, 0.56] },
+  // { shape: 'x',         label: 'cross',          color: [0.47, 0.67, 0.19] },
+  // { shape: '_',         label: 'hline',          color: [0.30, 0.75, 0.93] },
+  // { shape: '|',         label: 'vline',          color: [0.64, 0.08, 0.18] },
+  { shape: "square", label: "square", color: [0, 0.45, 0.74] },
+  { shape: "diamond", label: "diamond", color: [0.85, 0.33, 0.1] },
+  { shape: "^", label: "up-triangle", color: [0.93, 0.69, 0.13] },
+  { shape: "v", label: "down-triangle", color: [0.49, 0.18, 0.56] },
+  { shape: ">", label: "right-triangle", color: [0.47, 0.67, 0.19] },
+  { shape: "<", label: "left-triangle", color: [0.3, 0.75, 0.93] },
+  { shape: "pentagram", label: "pentagram", color: [0.64, 0.08, 0.18] },
+  { shape: "hexagram", label: "hexagram", color: [0.2, 0.6, 0.4] }
+];
+var N_PTS = 12;
+var X_VALS = Array.from({ length: N_PTS }, (_, i) => i + 1);
+async function main() {
+  const container = document.getElementById("plot_container");
+  const plotter = new Plotter();
+  const series = SHAPES.map(({ shape, color }, row) => {
+    const y = SHAPES.length - row;
+    const mk = new MarkerStyle();
+    mk.shape = shape;
+    mk.size = 14;
+    mk.edgeWidth = 1.5;
+    return {
+      x: X_VALS,
+      y: X_VALS.map(() => y),
+      lineStyle: "-",
+      lineWidth: 1,
+      marker: mk,
+      color
+    };
+  });
+  plotter.plot(series, {
+    title: "MATLAB marker shapes",
+    xlabel: "x",
+    ylabel: "series"
+  }, container);
+}
+main();
 /*! Bundled license information:
 
 opentype.js/dist/opentype.module.js:

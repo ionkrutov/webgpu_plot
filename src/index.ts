@@ -7,12 +7,12 @@ import { Plotter, MarkerStyle, type MarkerShape } from "./plotter";
 
 const SHAPES: Array<{ shape: MarkerShape; label: string; color: [number, number, number] }> = [
     { shape: 'o',         label: 'circle',        color: [0.00, 0.45, 0.74] },
-    { shape: '+',         label: 'plus',           color: [0.85, 0.33, 0.10] },
-    { shape: '*',         label: 'asterisk',       color: [0.93, 0.69, 0.13] },
-    { shape: '.',         label: 'point',          color: [0.49, 0.18, 0.56] },
-    { shape: 'x',         label: 'cross',          color: [0.47, 0.67, 0.19] },
-    { shape: '_',         label: 'hline',          color: [0.30, 0.75, 0.93] },
-    { shape: '|',         label: 'vline',          color: [0.64, 0.08, 0.18] },
+    // { shape: '+',         label: 'plus',           color: [0.85, 0.33, 0.10] },
+    // { shape: '*',         label: 'asterisk',       color: [0.93, 0.69, 0.13] },
+    // { shape: '.',         label: 'point',          color: [0.49, 0.18, 0.56] },
+    // { shape: 'x',         label: 'cross',          color: [0.47, 0.67, 0.19] },
+    // { shape: '_',         label: 'hline',          color: [0.30, 0.75, 0.93] },
+    // { shape: '|',         label: 'vline',          color: [0.64, 0.08, 0.18] },
     { shape: 'square',    label: 'square',         color: [0.00, 0.45, 0.74] },
     { shape: 'diamond',   label: 'diamond',        color: [0.85, 0.33, 0.10] },
     { shape: '^',         label: 'up-triangle',    color: [0.93, 0.69, 0.13] },

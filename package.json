@@ -1,18 +1,30 @@
 {
-  "name": "webgpu_plot",
+  "name": "webgpu-plot",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "WebGPU-accelerated 2D plotting library",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/webgpu-plot.js",
+      "types": "./dist/plotter.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --outfile=dist/index.js --format=esm",
+    "build": "npm run build:types && npm run build:esm && npm run build:iife && npm run build:demo",
+    "build:types": "tsc --emitDeclarationOnly",
+    "build:esm": "esbuild src/plotter.ts --bundle --outfile=dist/webgpu-plot.js --format=esm --platform=browser",
+    "build:iife": "esbuild src/plotter.ts --bundle --outfile=dist/webgpu-plot.iife.js --format=iife --global-name=WebGPUPlot --platform=browser",
+    "build:demo": "esbuild src/index.ts --bundle --outfile=dist/index.js --format=esm",
     "watch": "esbuild src/index.ts --bundle --outfile=dist/index.js --format=esm --watch",
     "serve": "npm run build && http-server",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
+  "keywords": ["webgpu", "plot", "chart", "visualization"],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "devDependencies": {
     "@types/earcut": "^3.0.0",
     "@types/opentype.js": "^1.3.9",
