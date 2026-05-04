@@ -7,10 +7,11 @@
 export interface AdapterOption {
     label: string;
     powerPreference: GPUPowerPreference | undefined;
+    forceFallbackAdapter?: boolean;
 }
 
 export async function enumerateAdapters(): Promise<AdapterOption[]> {
-    const prefs: Array<GPUPowerPreference | undefined> = ['high-performance', 'low-power', undefined];
+    const prefs: Array<GPUPowerPreference | undefined> = ['low-power', 'high-performance', undefined];
     const seen = new Set<string>();
     const options: AdapterOption[] = [];
     for (const pref of prefs) {
@@ -31,6 +32,25 @@ export async function enumerateAdapters(): Promise<AdapterOption[]> {
                        :                               'Default GPU';
         options.push({ label: parts.length > 0 ? parts.join(' ') : fallback, powerPreference: pref });
     }
+
+    // Software fallback (SwiftShader / Mesa LLVMpipe) — works when no native
+    // WebGPU-capable driver is exposed (e.g. AMD iGPU in Brave without flags).
+    if (options.length === 0) {
+        const a = await navigator.gpu.requestAdapter({ forceFallbackAdapter: true });
+        if (a) {
+            const info = a.info;
+            const parts: string[] = [];
+            if (info.description) parts.push(info.description);
+            else if (info.vendor)  parts.push(info.vendor);
+            if (info.architecture) parts.push(`(${info.architecture})`);
+            options.push({
+                label: (parts.length > 0 ? parts.join(' ') : 'Software renderer') + ' (software)',
+                powerPreference: undefined,
+                forceFallbackAdapter: true,
+            });
+        }
+    }
+
     return options;
 }
 

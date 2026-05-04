@@ -326,27 +326,33 @@ fn sdfDiamond(p: vec2f, r: f32) -> f32 {
     return (abs(p.x) + abs(p.y)) - r;
 }
 
-// Equilateral triangle: apex at top (+Y), base at bottom.
+// Equilateral triangle, apex at +Y, circumradius = r.
+// Centroid is at origin: apex y=+r, base midpoint y=-r/2, centroid=(r-r/2-r/2)/3=0.
 fn sdfTriangle(p: vec2f, r: f32) -> f32 {
-    // r = circumradius
     let px = abs(p.x);
-    // Inradius = r/2
     return max(px * 0.866025 + p.y * 0.5, -p.y) - r * 0.5;
 }
 
-// Oriented isoceles triangle helpers
-fn sdfTriangleUp(p: vec2f, r: f32)    -> f32 { return sdfTriangle(p, r); }
-fn sdfTriangleDown(p: vec2f, r: f32)  -> f32 { return sdfTriangle(vec2f(p.x, -p.y), r); }
+// Oriented isoceles triangle helpers.
+// localPos Y is screen-down (CSS pixel space), so we flip Y to match the
+// math-coordinate sdfTriangle (apex at +Y).
+fn sdfTriangleUp(p: vec2f, r: f32)    -> f32 { return sdfTriangle(vec2f(p.x, -p.y), r); }
+fn sdfTriangleDown(p: vec2f, r: f32)  -> f32 { return sdfTriangle(p, r); }
 fn sdfTriangleRight(p: vec2f, r: f32) -> f32 { return sdfTriangle(vec2f(-p.y, p.x), r); }
 fn sdfTriangleLeft(p: vec2f, r: f32)  -> f32 { return sdfTriangle(vec2f(p.y, -p.x), r); }
 
-// Regular n-gon star (polygon approach): n points, outer radius R, inner radius q*R
-fn sdfStar(p: vec2f, n: f32, R: f32, q: f32) -> f32 {
-    let an = 3.14159265 / n;
-    let en = 3.14159265 / max(3.0 * q, 1.0);   // external angle
+// n-pointed star (IQ formula). R = outer circumradius, m = pointiness (2.0 = sharp classic star).
+// One tip points screen-up (-Y in localPos space).
+fn sdfStar(p: vec2f, n: f32, R: f32, m: f32) -> f32 {
+    let an  = 3.14159265 / n;
+    let en  = 3.14159265 / m;
     let acs = vec2f(cos(an), sin(an));
     let ecs = vec2f(cos(en), sin(en));
-    let bn  = (atan2(p.y, p.x) % (2.0 * an)) - an;
+    // atan2(p.x, -p.y): angle from screen-up direction (Y-down space)
+    let a2  = 2.0 * an;
+    var raw = atan2(p.x, -p.y) % a2;
+    if (raw < 0.0) { raw += a2; }   // true modulo (WGSL % can be negative)
+    let bn  = raw - an;
     var pp  = length(p) * vec2f(cos(bn), abs(sin(bn)));
     pp      = pp - R * acs;
     pp      = pp + ecs * clamp(-dot(pp, ecs), 0.0, R * acs.y / ecs.y);
@@ -355,16 +361,18 @@ fn sdfStar(p: vec2f, n: f32, R: f32, q: f32) -> f32 {
 
 // Stroke helper: given a shape SDF, return edge colour if within edge band,
 // face colour if interior, else discard.
+// Edge band spans [-ew, 0]: exactly ew pixels inward from the shape boundary,
+// so edgeWidth=1 produces a 1px border (matches series lineWidth semantics).
 fn resolveStrokedShape(
     d:      f32,
-    ew:     f32,    // edge half-width in pixels
+    ew:     f32,    // edge width in pixels (full, not half)
     hollow: bool,
     face:   vec4f,
     edge:   vec4f
 ) -> vec4f {
-    if (d > ew) { discard; }       // outside
-    if (d > -ew) { return edge; }  // edge band
-    if (hollow) { discard; }       // hollow interior
+    if (d > 0.0) { discard; }     // outside shape boundary
+    if (d > -ew) { return edge; } // edge band (inward from boundary)
+    if (hollow) { discard; }      // hollow interior
     return face;
 }
 
@@ -380,6 +388,37 @@ fn sdfX(p: vec2f, r: f32, ew: f32) -> f32 {
     let r2 = 0.70710678;
     let q  = vec2f(r2 * p.x - r2 * p.y, r2 * p.x + r2 * p.y);
     return sdfPlus(q, r, ew);
+}
+
+// 5-pointed star (IQ). R = outer circumradius, rf = inner/outer radius ratio.
+// rf = 0.382 gives the golden-ratio classic star. Tip points screen-up.
+fn sdfStar5(p: vec2f, R: f32, rf: f32) -> f32 {
+    // Flip y: localPos y is screen-down, formula expects y-up (tip at +y)
+    var q = vec2f(p.x, -p.y);
+    let k1 = vec2f( 0.809016994375, -0.587785252192);
+    let k2 = vec2f(-0.809016994375, -0.587785252192);
+    q.x = abs(q.x);
+    q -= 2.0 * max(dot(k1, q), 0.0) * k1;
+    q -= 2.0 * max(dot(k2, q), 0.0) * k2;
+    q.x = abs(q.x);
+    q.y -= R;
+    let ba = rf * vec2f(-k1.y, k1.x) - vec2f(0.0, 1.0);
+    let h  = clamp(dot(q, ba) / dot(ba, ba), 0.0, R);
+    return length(q - ba * h) * sign(q.y * ba.x - q.x * ba.y);
+}
+
+// 6-pointed star. Tip points screen-up. rf = inner/outer radius ratio (0.5 = classic).
+// 6-star is symmetric in both axes → fold to first quadrant with abs(x) AND abs(y),
+// then one 60°-sector fold.
+fn sdfStar6(p: vec2f, R: f32, rf: f32) -> f32 {
+    var q = vec2f(abs(p.x), abs(p.y));   // fold to first quadrant (handles top+bottom tips)
+    let k = vec2f(0.866025403784, -0.5); // fold normal for 60° sector
+    q -= 2.0 * max(dot(k, q), 0.0) * k;
+    q.x = abs(q.x);                      // fold back after reflection can flip x
+    q.y -= R;
+    let ba = rf * vec2f(-k.y, k.x) - vec2f(0.0, 1.0);
+    let h  = clamp(dot(q, ba) / dot(ba, ba), 0.0, R);
+    return length(q - ba * h) * sign(q.y * ba.x - q.x * ba.y);
 }
 
 @fragment fn fsMarker(in: VSOut) -> @location(0) vec4f {
@@ -427,27 +466,27 @@ fn sdfX(p: vec2f, r: f32, ew: f32) -> f32 {
             return resolveStrokedShape(d, ew, hollow, in.faceCol, in.edgeCol);
         }
         case 9u: {  // ^ upward triangle
-            d = sdfTriangleUp(p, outerR * 2.0);
+            d = sdfTriangleUp(p, outerR);
             return resolveStrokedShape(d, ew, hollow, in.faceCol, in.edgeCol);
         }
         case 10u: {  // v downward triangle
-            d = sdfTriangleDown(p, outerR * 2.0);
+            d = sdfTriangleDown(p, outerR);
             return resolveStrokedShape(d, ew, hollow, in.faceCol, in.edgeCol);
         }
         case 11u: {  // > right-pointing triangle
-            d = sdfTriangleRight(p, outerR * 2.0);
+            d = sdfTriangleRight(p, outerR);
             return resolveStrokedShape(d, ew, hollow, in.faceCol, in.edgeCol);
         }
         case 12u: {  // < left-pointing triangle
-            d = sdfTriangleLeft(p, outerR * 2.0);
+            d = sdfTriangleLeft(p, outerR);
             return resolveStrokedShape(d, ew, hollow, in.faceCol, in.edgeCol);
         }
         case 13u: {  // pentagram (5-pointed star)
-            d = sdfStar(p, 5.0, outerR, 0.4);
+            d = sdfStar5(p, outerR, 0.382);
             return resolveStrokedShape(d, ew, hollow, in.faceCol, in.edgeCol);
         }
         case 14u: {  // hexagram (6-pointed star)
-            d = sdfStar(p, 6.0, outerR, 0.5);
+            d = sdfStar6(p, outerR, 0.45);
             return resolveStrokedShape(d, ew, hollow, in.faceCol, in.edgeCol);
         }
         default: {  // 0 = circle

@@ -294,7 +294,7 @@ export class Figure {
             const idx = parseInt(this.gpuSelectEl.value, 10);
             const opt = this.adapterOptions[idx];
             if (!opt) return;
-            await this.initGPUResources(opt.powerPreference);
+            await this.initGPUResources(opt);
             this.render();
         });
 
@@ -422,14 +422,17 @@ export class Figure {
         this.gpuSelectEl.disabled = this.adapterOptions.length <= 1;
 
         if (this.adapterOptions.length === 0) throw new Error("No GPUAdapter found");
-        await this.initGPUResources(this.adapterOptions[0]!.powerPreference);
+        await this.initGPUResources(this.adapterOptions[0]!);
     }
 
-    private async initGPUResources(powerPreference: GPUPowerPreference | undefined): Promise<void> {
+    private async initGPUResources(option: AdapterOption): Promise<void> {
         const oldDevice: GPUDevice | undefined = this.device;
 
+        const adapterOpts: GPURequestAdapterOptions = {};
+        if (option.powerPreference !== undefined) adapterOpts.powerPreference = option.powerPreference;
+        if (option.forceFallbackAdapter) adapterOpts.forceFallbackAdapter = true;
         const adapter = await navigator.gpu.requestAdapter(
-            powerPreference !== undefined ? { powerPreference } : undefined
+            Object.keys(adapterOpts).length > 0 ? adapterOpts : undefined
         );
         if (!adapter) throw new Error("No GPUAdapter found");
         // Запрашиваем максимальный поддерживаемый размер буфера

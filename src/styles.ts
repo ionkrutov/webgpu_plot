@@ -51,7 +51,7 @@ export class MarkerStyle {
     /** Marker shape. Default: 'o' (circle). */
     shape: MarkerShape = 'o';
     /** Marker diameter in CSS pixels. Default: 6 */
-    size: number = 6;
+    size: number = 10;
     /**
      * Fill color [r, g, b] for the marker interior.
      * Default: null — no fill (hollow marker, MATLAB default).
