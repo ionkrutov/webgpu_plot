@@ -8,6 +8,7 @@ export { Axes3D } from "./axes3d.js";
 export { Line3D, Scatter3D, Surface3D, Contour3D } from "./artists3d.js";
 export type { FaceColor, EdgeColor } from "./artists3d.js";
 export type { ColormapName } from "./colormap.js";
+export { COLORMAP_NAMES } from "./colormap.js";
 export { linspace, meshgrid, peaks } from "./grid-utils.js";
 export { GridStyle, BackgroundStyle, MarkerStyle, PlotStyle, matlabStyle } from "./styles.js";
 export type { MarkerShape, LineStyle, RGB, RGBA, AxisData, NumericArray, PlotterOptions, FigureOptions, PlotSeries, } from "./styles.js";
