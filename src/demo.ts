@@ -1,5 +1,6 @@
 import {
-    figure, subplot, plot, hold, title, xlabel, ylabel, legend, grid, xlim, sgtitle, linkaxes, gca,
+    figure, subplot, plot, hold, title, xlabel, ylabel, zlabel, legend, grid, xlim, sgtitle, linkaxes, gca,
+    plot3, scatter3, surf, mesh, contour3, colorbar, view, linspace, peaks,
     MarkerStyle,
 } from "./index";
 import type { MarkerShape } from "./index";
@@ -48,3 +49,35 @@ grid("on");
 xlim([0, n]);
 
 linkaxes([ax1, ax2], "x");
+
+// ---- 3-D: drag to rotate, Shift-drag to pan, wheel to zoom, double-click to reset ----
+figure("#plot_container", { name: "webgpu-plot 3-D demo", width: 1000, height: 760 });
+sgtitle("3-D plots: surf, mesh, plot3 / scatter3, contour3");
+
+const { X, Y, Z } = peaks(60);
+
+subplot(2, 2, 1);
+surf(X, Y, Z, { EdgeColor: "none" });
+title("surf");
+xlabel("x"); ylabel("y"); zlabel("z");
+colorbar("on");
+
+subplot(2, 2, 2);
+mesh(X, Y, Z);
+title("mesh");
+xlabel("x"); ylabel("y"); zlabel("z");
+
+subplot(2, 2, 3);
+const s = linspace(0, 8 * Math.PI, 600);
+plot3(s.map(Math.cos), s.map(Math.sin), s.map(v => v / 4), "r-", { LineWidth: 2 });
+hold("on");
+const sx = linspace(0, 6 * Math.PI, 80);
+scatter3(sx.map(v => 1.5 * Math.cos(v)), sx.map(v => 1.5 * Math.sin(v)), sx.map(v => v / 3), 36, sx, "filled");
+title("plot3 + scatter3");
+xlabel("x"); ylabel("y"); zlabel("z");
+
+subplot(2, 2, 4);
+contour3(X, Y, Z, 16);
+view(-30, 40);
+title("contour3");
+xlabel("x"); ylabel("y"); zlabel("z");

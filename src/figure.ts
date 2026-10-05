@@ -2,6 +2,8 @@
 import type { Font } from "opentype.js";
 import { Axes } from "./axes.js";
 import type { FigureHost } from "./axes.js";
+import { Axes3D } from "./axes3d.js";
+import { DEPTH_FORMAT } from "./gpu-3d.js";
 import { injectStyles } from "./dom-styles.js";
 import { loadFont } from "./font.js";
 import type { FontSource } from "./font.js";
@@ -68,7 +70,7 @@ export class Figure implements FigureHost {
     private adapters: AdapterOption[] = [];
     private currentAdapter: AdapterOption | null = null;
     private unsubLost: (() => void) | null = null;
-    private target: { tex: GPUTexture; msaa: GPUTexture; bind: GPUBindGroup; w: number; h: number } | null = null;
+    private target: { tex: GPUTexture; msaa: GPUTexture; depth: GPUTexture | null; bind: GPUBindGroup; w: number; h: number } | null = null;
 
     private _axes: Axes[] = [];
     private current: Axes | null = null;
@@ -77,7 +79,7 @@ export class Figure implements FigureHost {
     private suptitle = '';
 
     private mode: Mode = 'pan';
-    private panDrag: { ax: Axes; snap: ReturnType<Axes['getView']>; x: number; y: number } | null = null;
+    private panDrag: { ax: Axes; snap: ReturnType<Axes['getView']>; x: number; y: number; pan: boolean } | null = null;
     private zoomDrag: { ax: Axes; x: number; y: number } | null = null;
 
     private rafId = 0;
@@ -232,12 +234,37 @@ export class Figure implements FigureHost {
         return this.subplot(t.rows, t.cols, p);
     }
 
-    private addAxes(slot: GridSlot): Axes {
-        const ax = new Axes(this, slot);
+    private addAxes(slot: GridSlot): Axes { return this.attach(new Axes(this, slot)); }
+
+    private attach<T extends Axes>(ax: T): T {
         this._axes.push(ax);
         this.current = ax;
         this.requestRender();
         return ax;
+    }
+
+    private swap<T extends Axes>(old: Axes, next: T): T {
+        this.removeAxes(old);
+        return this.attach(next);
+    }
+
+    /** Current axes as 3-D axes; empty 2-D axes (or 2-D axes without hold) are replaced in place. */
+    gca3(): Axes3D {
+        const cur = this.current;
+        if (cur instanceof Axes3D) return cur;
+        if (!cur) return this.attach(new Axes3D(this, slotFromIndex(1, 1, 1)));
+        if (cur.holding && cur.lines.length > 0) {
+            throw new Error('Cannot add a 3-D plot to 2-D axes with hold on; use subplot() for new axes');
+        }
+        return this.swap(cur, new Axes3D(this, cur.slot));
+    }
+
+    /** Current axes for 2-D plotting; 3-D axes without hold are replaced in place, as in MATLAB. */
+    gca2d(): Axes {
+        const cur = this.gca();
+        if (!(cur instanceof Axes3D)) return cur;
+        if (cur.holding) throw new Error('Cannot plot 2-D data into 3-D axes with hold on; use subplot() for new axes');
+        return this.swap(cur, new Axes(this, cur.slot));
     }
 
     private removeAxes(ax: Axes): void {
@@ -265,7 +292,7 @@ export class Figure implements FigureHost {
     linkaxes(axes: readonly Axes[], dim: 'x' | 'y' | 'xy' = 'xy'): this { Axes.link(axes, dim); return this; }
 
     // Shortcuts that act on the current axes
-    plot(...args: unknown[]): Line[]            { return this.gca().plot(...args); }
+    plot(...args: unknown[]): Line[]            { return this.gca2d().plot(...args); }
     hold(state?: Parameters<Axes['hold']>[0]): this { this.gca().hold(state); return this; }
     title(text: string): this                   { this.gca().title(text); return this; }
     xlabel(text: string): this                  { this.gca().xlabel(text); return this; }
@@ -275,7 +302,7 @@ export class Figure implements FigureHost {
     axis(mode: Parameters<Axes['axis']>[0]): this   { this.gca().axis(mode); return this; }
 
     /** Replaces the content of the current axes with the given series. */
-    setData(series: PlotSeries[]): void { this.gca().hold(false).plot(series); }
+    setData(series: PlotSeries[]): void { this.gca2d().hold(false).plot(series); }
 
     private targetAxes(): Axes | null { return this.active ?? this.current ?? this._axes[0] ?? null; }
 
@@ -334,6 +361,7 @@ export class Figure implements FigureHost {
     private dropTarget(): void {
         this.target?.tex.destroy();
         this.target?.msaa.destroy();
+        this.target?.depth?.destroy();
         this.target = null;
     }
 
@@ -397,12 +425,13 @@ export class Figure implements FigureHost {
         cp.end();
 
         const [fr, fg, fb] = style.background.figureColor;
-        const rp = enc.beginRenderPass({
-            colorAttachments: [{
-                view: target.msaa.createView(), resolveTarget: target.tex.createView(), loadOp: 'clear', storeOp: 'discard',
-                clearValue: { r: fr, g: fg, b: fb, a: 1 },
-            }],
-        });
+        const threeD = this._axes.filter((a): a is Axes3D => a instanceof Axes3D);
+        const color: GPURenderPassColorAttachment = {
+            view: target.msaa.createView(), loadOp: 'clear', storeOp: threeD.length > 0 ? 'store' : 'discard',
+            clearValue: { r: fr, g: fg, b: fb, a: 1 },
+        };
+        if (threeD.length === 0) color.resolveTarget = target.tex.createView();
+        const rp = enc.beginRenderPass({ colorAttachments: [color] });
         for (const a of this._axes) a.encodeDraw(rp, tw, th);
         if (this.suptitleBuf.buffer && this.suptitleBuf.count > 0) {
             rp.setViewport(0, 0, tw, th, 0, 1);
@@ -412,6 +441,23 @@ export class Figure implements FigureHost {
             rp.draw(this.suptitleBuf.count);
         }
         rp.end();
+
+        if (threeD.length > 0) {
+            target.depth ??= dev.createTexture({
+                size: [tw, th], format: DEPTH_FORMAT, sampleCount: MSAA_SAMPLES,
+                usage: GPUTextureUsage.RENDER_ATTACHMENT,
+            });
+            const rp3 = enc.beginRenderPass({
+                colorAttachments: [{
+                    view: target.msaa.createView(), resolveTarget: target.tex.createView(), loadOp: 'load', storeOp: 'discard',
+                }],
+                depthStencilAttachment: {
+                    view: target.depth.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'discard',
+                },
+            });
+            for (const a of threeD) a.encodeDraw3D(rp3, tw, th);
+            rp3.end();
+        }
 
         const blit = enc.beginRenderPass({
             colorAttachments: [{
@@ -445,7 +491,7 @@ export class Figure implements FigureHost {
                 { binding: 1, resource: tex.createView() },
             ],
         });
-        return (this.target = { tex, msaa, bind, w, h });
+        return (this.target = { tex, msaa, depth: null, bind, w, h });
     }
 
     // =====================================================================
@@ -485,18 +531,23 @@ export class Figure implements FigureHost {
             ax.zoomAround(d.x, d.y, e.deltaY > 0 ? 1.15 : 1 / 1.15);
         }, { passive: false, signal });
 
+        this.canvas.addEventListener('contextmenu', e => {
+            const p = pos(e);
+            if (this.axesAt(p.x, p.y) instanceof Axes3D) e.preventDefault();
+        }, { signal });
+
         this.canvas.addEventListener('pointerdown', e => {
-            if (e.button !== 0) return;
+            if (e.button !== 0 && e.button !== 2) return;
             const p = pos(e), ax = this.axesAt(p.x, p.y);
-            if (!ax) return;
+            if (!ax || (e.button === 2 && !(ax instanceof Axes3D))) return;
             e.preventDefault();
             this.active = ax;
-            if (this.mode === 'zoomRegion') {
+            if (this.mode === 'zoomRegion' && !(ax instanceof Axes3D)) {
                 const s = clampToPlot(ax, p.x, p.y);
                 this.zoomDrag = { ax, x: s.x, y: s.y };
                 Object.assign(this.zoomRectEl.style, { left: `${s.x}px`, top: `${s.y}px`, width: '0px', height: '0px', display: 'block' });
-            } else if (this.mode === 'pan') {
-                this.panDrag = { ax, snap: ax.getView(), x: p.x, y: p.y };
+            } else if (this.mode === 'pan' || ax instanceof Axes3D) {
+                this.panDrag = { ax, snap: ax.getView(), x: p.x, y: p.y, pan: e.shiftKey || e.button === 2 };
                 this.canvas.style.cursor = 'grabbing';
             } else {
                 return;
@@ -513,7 +564,9 @@ export class Figure implements FigureHost {
                     width: `${Math.abs(q.x - this.zoomDrag.x)}px`, height: `${Math.abs(q.y - this.zoomDrag.y)}px`,
                 });
             } else if (this.panDrag) {
-                this.panDrag.ax.panFrom(this.panDrag.snap, p.x - this.panDrag.x, p.y - this.panDrag.y);
+                const { ax, snap, x, y, pan } = this.panDrag;
+                if (ax instanceof Axes3D) ax.dragFrom(snap, p.x - x, p.y - y, pan);
+                else ax.panFrom(snap, p.x - x, p.y - y);
             } else {
                 const ax = this.axesAt(p.x, p.y);
                 if (ax) this.active = ax;

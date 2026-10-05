@@ -161,6 +161,8 @@ export class Axes {
 
     get lines(): readonly Line[] { return this._lines; }
     get titleText(): string { return this._title; }
+    /** True after hold('on'). */
+    get holding(): boolean { return this.holdOn; }
     get xlabelText(): string { return this._xlabel; }
     get ylabelText(): string { return this._ylabel; }
 

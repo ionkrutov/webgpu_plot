@@ -5,6 +5,8 @@ import {
     dashedComputeShaderCode,
 } from "./shaders.js";
 import type { AdapterOption } from "./gpu-utils.js";
+import { createPipelines3D } from "./gpu-3d.js";
+import type { Pipelines3D } from "./gpu-3d.js";
 
 /** Bytes written by the solid-line compute shader per segment (6 verts × 6 floats). */
 export const SOLID_BYTES_PER_SEG = 36 * 4;
@@ -48,6 +50,7 @@ export class GpuContext {
 
     private refs = 0;
     private destroyed = false;
+    private p3d: Pipelines3D | null = null;
     private readonly lostListeners = new Set<Listener>();
 
     private constructor(readonly device: GPUDevice, readonly key: string) {
@@ -178,6 +181,11 @@ export class GpuContext {
     }
 
     get isLost(): boolean { return this.destroyed; }
+
+    /** 3-D pipelines, created on first use so 2-D figures never compile them. */
+    get pipelines3d(): Pipelines3D {
+        return this.p3d ??= createPipelines3D(this.device, this.format, MSAA_SAMPLES);
+    }
 
     /** Called when the device is lost for any reason other than release(). */
     onLost(cb: Listener): () => void {

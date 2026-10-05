@@ -78,7 +78,11 @@ export class GrowBuffer {
     get buffer(): GPUBuffer | null { return this.buf; }
 
     write(device: GPUDevice, data: number[], floatsPerVertex: number): void {
-        const bytes = data.length * 4;
+        this.writeF32(device, new Float32Array(data), floatsPerVertex);
+    }
+
+    writeF32(device: GPUDevice, data: Float32Array<ArrayBuffer>, floatsPerVertex: number): void {
+        const bytes = data.byteLength;
         if (bytes === 0) { this.count = 0; return; }
         if (!this.buf || this.owner !== device || this.cap < bytes) {
             this.buf?.destroy();
@@ -90,7 +94,7 @@ export class GrowBuffer {
             });
             this.owner = device;
         }
-        device.queue.writeBuffer(this.buf, 0, new Float32Array(data));
+        device.queue.writeBuffer(this.buf, 0, data);
         this.count = data.length / floatsPerVertex;
     }
 
