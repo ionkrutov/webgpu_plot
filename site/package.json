@@ -1,0 +1,17 @@
+{
+  "name": "webgpu-plot-site",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Online editor for webgpu-plot: code on the left, live plots on the right",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "serve": "npm run build && npx http-server dist -c-1",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.3",
+    "monaco-editor": "^0.52.2",
+    "typescript": "^5.9.3"
+  }
+}

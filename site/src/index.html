@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>webgpu-plot playground</title>
+<link rel="stylesheet" href="main.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+    <strong>webgpu-plot</strong><span class="sub">playground</span>
+    <select id="examples" title="Load an example"></select>
+    <button id="run-all" title="Ctrl+Enter">▶ Run all</button>
+    <button id="run-cell" title="Shift+Enter">▶ Run to cursor cell</button>
+    <button id="share">Share link</button>
+    <span id="status"></span>
+    <span class="spacer"></span>
+    <a href="https://www.npmjs.com/package/webgpu-plot" target="_blank" rel="noopener">npm</a>
+    <a href="https://github.com/ionkrutov/webgpu_plot" target="_blank" rel="noopener">GitHub</a>
+</header>
+<main id="layout">
+    <section id="editor"></section>
+    <div id="divider" title="Drag to resize"></div>
+    <section id="output">
+        <div id="banner" hidden></div>
+        <div id="frame-host"></div>
+        <div id="console">
+            <div id="console-head">Console <button id="clear">Clear</button></div>
+            <div id="console-body"></div>
+        </div>
+    </section>
+</main>
+<script src="main.js"></script>
+</body>
+</html>
