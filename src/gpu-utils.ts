@@ -10,7 +10,15 @@ export interface AdapterOption {
     forceFallbackAdapter?: boolean;
 }
 
-export async function enumerateAdapters(): Promise<AdapterOption[]> {
+let adapterCache: Promise<AdapterOption[]> | null = null;
+
+/** Enumerates available GPU adapters once and caches the result. */
+export function enumerateAdapters(): Promise<AdapterOption[]> {
+    adapterCache ??= probeAdapters();
+    return adapterCache;
+}
+
+async function probeAdapters(): Promise<AdapterOption[]> {
     const prefs: Array<GPUPowerPreference | undefined> = ['low-power', 'high-performance', undefined];
     const seen = new Set<string>();
     const options: AdapterOption[] = [];
@@ -52,5 +60,44 @@ export async function enumerateAdapters(): Promise<AdapterOption[]> {
     }
 
     return options;
+}
+
+// ---------------------------------------------------------------------------
+// GrowBuffer — vertex buffer reused across frames; re-allocated only when too small
+// ---------------------------------------------------------------------------
+
+export class GrowBuffer {
+    private buf: GPUBuffer | null = null;
+    private cap = 0;
+    private owner: GPUDevice | null = null;
+    /** Number of vertices written by the last write(). */
+    count = 0;
+
+    constructor(private readonly label: string) {}
+
+    get buffer(): GPUBuffer | null { return this.buf; }
+
+    write(device: GPUDevice, data: number[], floatsPerVertex: number): void {
+        const bytes = data.length * 4;
+        if (bytes === 0) { this.count = 0; return; }
+        if (!this.buf || this.owner !== device || this.cap < bytes) {
+            this.buf?.destroy();
+            this.cap = Math.max(bytes, this.cap * 2, 4096);
+            this.buf = device.createBuffer({
+                label: this.label,
+                size: this.cap,
+                usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+            });
+            this.owner = device;
+        }
+        device.queue.writeBuffer(this.buf, 0, new Float32Array(data));
+        this.count = data.length / floatsPerVertex;
+    }
+
+    /** Drops the GPU buffer (e.g. after a device switch). */
+    destroy(): void {
+        this.buf?.destroy();
+        this.buf = null; this.cap = 0; this.owner = null; this.count = 0;
+    }
 }
 

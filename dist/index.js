@@ -15297,7 +15297,7 @@ var SHAPES = [
   { shape: "pentagram", label: "pentagram", color: [0.64, 0.08, 0.18] },
   { shape: "hexagram", label: "hexagram", color: [0.2, 0.6, 0.4] }
 ];
-var N_PTS = 12;
+var N_PTS = 12e3;
 var X_VALS = Array.from({ length: N_PTS }, (_, i) => i + 1);
 async function main() {
   const container = document.getElementById("plot_container");

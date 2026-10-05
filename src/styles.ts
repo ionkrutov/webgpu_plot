@@ -24,6 +24,10 @@ export class BackgroundStyle {
 // MarkerStyle — per-series marker appearance
 // ---------------------------------------------------------------------------
 
+export type RGB  = [number, number, number];
+export type RGBA = [number, number, number, number?];
+export type LineStyle = '-' | '--' | ':' | '-.' | 'none';
+
 /** Supported marker shapes. */
 export type MarkerShape =
     | 'o'           // circle (default)
@@ -50,7 +54,7 @@ export type MarkerShape =
 export class MarkerStyle {
     /** Marker shape. Default: 'o' (circle). */
     shape: MarkerShape = 'o';
-    /** Marker diameter in CSS pixels. Default: 6 */
+    /** Marker diameter in CSS pixels. Default: 10 */
     size: number = 10;
     /**
      * Fill color [r, g, b] for the marker interior.
@@ -75,6 +79,10 @@ export class PlotStyle {
     background: BackgroundStyle = new BackgroundStyle();
     /** Color for axis lines, ticks, and tick labels [r, g, b]. Default: ggplot2 grey30 */
     axisColor: [number, number, number] = [0.302, 0.302, 0.302];
+    /** Plot frame and tick mark color [r, g, b]. Default: mid gray */
+    borderColor: [number, number, number] = [0.5, 0.5, 0.5];
+    /** Plot frame width in CSS pixels. Default: 1 */
+    borderWidth: number = 1;
     /**
      * Direction of axis ticks relative to the plot panel.
      * - 'in'   — ticks point inward into the panel (default)
@@ -102,7 +110,7 @@ export function matlabStyle(): PlotStyle {
     const s = new PlotStyle();
     s.background.panelColor  = [1, 1, 1];
     s.background.figureColor = [1, 1, 1];
-    s.axisColor              = [0, 0, 0];
+    s.axisColor              = [0.15, 0.15, 0.15];
     s.grid.show      = true;
     s.grid.color     = [0.75, 0.75, 0.75];  // ≈ MATLAB default grid grey
     s.grid.lineWidth = 2;
@@ -119,8 +127,10 @@ export interface PlotterOptions {
     fontSize?: number;
     /** Title font size in pixels. Default: fontSize * 1.4 */
     titleFontSize?: number;
-    /** Font family URL/path to load via opentype.js. */
+    /** URL of a TTF/OTF font to load via opentype.js. Default: the bundled Roboto Regular. */
     fontUrl?: string;
+    /** Raw TTF/OTF bytes; takes precedence over `fontUrl`. */
+    font?: ArrayBuffer | Uint8Array;
     /** Show grid lines. Default: true */
     grid?: boolean;
 
@@ -149,25 +159,53 @@ export interface PlotterOptions {
 // ---------------------------------------------------------------------------
 
 export interface FigureOptions {
-    /** Title shown above the plot. Default: '' */
+    /** Title of the first axes. Default: '' */
     title?: string;
-    /** X-axis label. Default: '' */
+    /** X-axis label of the first axes. Default: '' */
     xlabel?: string;
-    /** Y-axis label. Default: '' */
+    /** Y-axis label of the first axes. Default: '' */
     ylabel?: string;
+    /** Window caption shown in the toolbar header. Default: `title`. */
+    name?: string;
+    /** Window width: number = CSS px, string = any CSS length (e.g. '100%'). Default: 820 */
+    width?: number | string;
+    /** Window height: number = CSS px, string = any CSS length. Default: 640 */
+    height?: number | string;
+    /**
+     * Show the header with toolbar buttons. Default: true.
+     * With `false` the figure is a bare canvas that fills its container (embed mode).
+     */
+    toolbar?: boolean;
+}
+
+/** PlotterOptions with all defaults applied. */
+export interface ResolvedOptions {
+    fontSize: number;
+    titleFontSize: number;
+    paddingLeft: number;
+    paddingYLabelToYTicks: number;
+    paddingTop: number;
+    paddingTitleToPlot: number;
+    paddingBottom: number;
+    paddingXLabelToPlot: number;
+    paddingRight: number;
+    style: PlotStyle;
 }
 
 // ---------------------------------------------------------------------------
 // PlotSeries — one data series
 // ---------------------------------------------------------------------------
 
+export type NumericArray = ArrayLike<number>;
+export type AxisData = NumericArray | readonly string[] | readonly Date[];
+
 export interface PlotSeries {
-    x: number[] | string[] | Date[];
-    y: number[] | string[] | Date[];
+    x: AxisData;
+    y: AxisData;
     /** RGB or RGBA colour, each in [0, 1]. 4th element is alpha (default 1.0). */
     color?: [number, number, number, number?];
     /** Line style. Default: '-' (solid). Use 'none' to draw markers only (scatter plot). */
-    lineStyle?: '-' | '--' | ':' | '-.' | 'none';
+    lineStyle?: LineStyle;
     /** Line width in CSS pixels. Default: 1.5 */
     lineWidth?: number;
     /**

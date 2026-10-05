@@ -1,103 +1,15 @@
+<!DOCTYPE html>
 <html>
 <head>
+<meta charset="utf-8">
+<title>webgpu-plot demo</title>
 <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #444; display: flex; padding: 24px; }
-
-    /* ---- Resizable window ---- */
-    .plot_window {
-        display: flex;
-        flex-direction: column;
-        width: 820px;
-        height: 640px;
-        min-width: 320px;
-        min-height: 270px;
-        resize: both;
-        overflow: hidden;
-        border: 1px solid #888;
-        border-radius: 7px;
-        box-shadow: 0 6px 24px rgba(0,0,0,0.50);
-    }
-
-    /* ---- Header / title bar ---- */
-    .plot_header {
-        display: flex;
-        align-items: center;
-        padding: 5px 8px;
-        gap: 8px;
-        flex-shrink: 0;
-        background: #e8e8e8;
-        border-bottom: 1px solid #c0c0c0;
-        user-select: none;
-    }
-
-    .plot_title_label {
-        flex: 1;
-        font-family: sans-serif;
-        font-size: 13px;
-        font-weight: 600;
-        color: #333;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-
-    /* ---- Toolbar (horizontal, inside header) ---- */
-    .plot_toolbar {
-        display: flex;
-        flex-direction: row;
-        gap: 4px;
-    }
-
-    .plot-btn {
-        width: 30px;
-        height: 30px;
-        background: #fff;
-        border: 1px solid #bbb;
-        border-radius: 5px;
-        cursor: pointer;
-        font-size: 18px;
-        line-height: 1;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.18);
-        user-select: none;
-        transition: background 0.1s;
-    }
-    .plot-btn:hover  { background: #f5f8ff; }
-    .plot-btn:active { background: #d2e1ff; }
-    .plot-btn.active { background: #b4d2ff; border-color: #4477cc; }
-
-    /* ---- Canvas area (fills remaining space) ---- */
-    .canvas_container {
-        position: relative;
-        flex: 1;
-        overflow: hidden;
-    }
-
-    canvas { display: block; width: 100%; height: 100%; }
-
-    /* ---- Rubber-band zoom rect ---- */
-    .zoom_rect {
-        position: absolute;
-        display: none;
-        border: 2px dashed rgba(30, 100, 220, 0.9);
-        background: rgba(30, 100, 220, 0.10);
-        pointer-events: none;
-        z-index: 5;
-        box-sizing: border-box;
-    }
+    body { background: #444; padding: 24px; }
 </style>
 </head>
 <body>
-
-<!-- The Plotter.plot() / figure() call will append .plot_window elements here -->
 <div id="plot_container"></div>
-
-<!-- Execute the script code -->
-<script type="module" src="dist/index.js"></script>
-
+<script type="module" src="dist/demo.js"></script>
 </body>
 </html>
-

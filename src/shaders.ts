@@ -100,9 +100,10 @@ fn csMain(@builtin(global_invocation_id) gid: vec3u) {
     let xa = pts[iA * 2u];  let ya = pts[iA * 2u + 1u];
     let xb = pts[iB * 2u];  let yb = pts[iB * 2u + 1u];
 
-    // Cull: both endpoints on same side of view
+    // Cull: both endpoints on same side of view, or either endpoint is a NaN/Inf gap marker (|v| > 1e37)
     let degenerate = (xa < p.xMin && xb < p.xMin) || (xa > p.xMax && xb > p.xMax) ||
-                     (ya < p.yMin && yb < p.yMin) || (ya > p.yMax && yb > p.yMax);
+                     (ya < p.yMin && yb < p.yMin) || (ya > p.yMax && yb > p.yMax) ||
+                     abs(xa) > 1e37 || abs(ya) > 1e37 || abs(xb) > 1e37 || abs(yb) > 1e37;
     if (degenerate) {
         for (var v = 0u; v < 6u; v++) {
             out[base + v*6u] = 0.0; out[base + v*6u+1u] = 0.0;
@@ -552,6 +553,9 @@ fn csDashed() {
 
         let xa = pts[iA * 2u]; let ya = pts[iA * 2u + 1u];
         let xb = pts[iB * 2u]; let yb = pts[iB * 2u + 1u];
+
+        // NaN/Inf gap marker: skip this segment
+        if (abs(xa) > 1e37 || abs(ya) > 1e37 || abs(xb) > 1e37 || abs(yb) > 1e37) { continue; }
 
         // Data → CSS pixel space (same formula as solid-line compute shader)
         let pax = (dp.plotX0 + (xa - dp.xMin) / xr * (dp.plotX1 - dp.plotX0) + 1.0) * hw;

@@ -32,7 +32,15 @@ export function niceTicks(min: number, max: number, targetCount = 5): number[] {
     return ticks;
 }
 
-export function formatTick(v: number): string {
+/**
+ * Formats a tick value. When `step` is given and the value is so large relative to it that four
+ * significant digits would make neighbouring ticks identical, enough decimals are shown instead.
+ */
+export function formatTick(v: number, step?: number): string {
+    if (step !== undefined && step > 0 && Math.abs(v) >= step * 1000 && Math.abs(v) < 1e15) {
+        const decimals = Math.min(12, Math.max(0, Math.ceil(-Math.log10(step))));
+        return String(parseFloat(v.toFixed(decimals)));
+    }
     if (Number.isInteger(v)) return String(v);
     return parseFloat(v.toPrecision(4)).toString();
 }

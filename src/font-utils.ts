@@ -167,7 +167,7 @@ export function signedArea2D(pts: number[]): number {
     return area / 2;
 }
 
-export function glyphToTriangles(path: opentype.Path, tolerance = 0.35): number[] {
+export function glyphToTriangles(path: opentype.Path, tolerance = 0.05): number[] {
     const scaleX = 1.0, scaleY = 1.0;
     const contours: number[][] = [];
     let current: number[] = [];
@@ -249,3 +249,86 @@ export function textToTriVerts(
     return verts;
 }
 
+
+// ---------------------------------------------------------------------------
+// Cached text meshes (pixel space, baseline origin, Y down — opentype convention)
+// ---------------------------------------------------------------------------
+
+export interface TextMesh {
+    /** Interleaved x,y triangle-list vertices in pixels. */
+    xy: Float32Array;
+    /** Advance width in pixels. */
+    width: number;
+}
+
+const MESH_CACHE_LIMIT = 4000;
+const meshCache  = new WeakMap<opentype.Font, Map<string, TextMesh>>();
+const glyphCache = new WeakMap<opentype.Font, Map<string, number[]>>();
+
+function cacheFor<V>(store: WeakMap<opentype.Font, Map<string, V>>, font: opentype.Font): Map<string, V> {
+    let m = store.get(font);
+    if (!m) { m = new Map(); store.set(font, m); }
+    return m;
+}
+
+export function textWidthPx(text: string, font: opentype.Font, fontSize: number): number {
+    const scale = fontSize / font.unitsPerEm;
+    let w = 0;
+    for (const ch of text) w += (font.charToGlyph(ch).advanceWidth ?? 0) * scale;
+    return w;
+}
+
+export function textMesh(text: string, font: opentype.Font, fontSize: number): TextMesh {
+    const meshes = cacheFor(meshCache, font);
+    const key = fontSize + '|' + text;
+    const hit = meshes.get(key);
+    if (hit) return hit;
+
+    const glyphs = cacheFor(glyphCache, font);
+    const scale = fontSize / font.unitsPerEm;
+    const out: number[] = [];
+    let pen = 0;
+    let prev: opentype.Glyph | null = null;
+    for (const ch of text) {
+        const glyph = font.charToGlyph(ch);
+        if (prev) pen += font.getKerningValue(prev, glyph) * scale;
+        prev = glyph;
+        const gKey = fontSize + '|' + ch;
+        let tris = glyphs.get(gKey);
+        if (!tris) { tris = glyphToTriangles(glyph.getPath(0, 0, fontSize)); glyphs.set(gKey, tris); }
+        for (let i = 0; i < tris.length; i += 2) out.push(tris[i]! + pen, tris[i + 1]!);
+        pen += (glyph.advanceWidth ?? 0) * scale;
+    }
+    const mesh: TextMesh = { xy: Float32Array.from(out), width: pen };
+    if (meshes.size >= MESH_CACHE_LIMIT) meshes.clear();
+    meshes.set(key, mesh);
+    return mesh;
+}
+
+/** Appends clip-space vertices (x,y,r,g,b) for text whose baseline-left is at (penXpx, baselineYpx) from the top-left. */
+export function pushText(
+    out: number[], mesh: TextMesh,
+    penXpx: number, baselineYpx: number,
+    w: number, h: number,
+    r: number, g: number, b: number
+): void {
+    const sx = 2 / w, sy = 2 / h, xy = mesh.xy;
+    for (let i = 0; i < xy.length; i += 2) {
+        out.push((penXpx + xy[i]!) * sx - 1, 1 - (baselineYpx + xy[i + 1]!) * sy, r, g, b);
+    }
+}
+
+/** Same as pushText but rotated 90° CCW (reads bottom-to-top), centred on (centerYpx) along the baseline. */
+export function pushTextRotated(
+    out: number[], mesh: TextMesh,
+    baselineXpx: number, centerYpx: number,
+    w: number, h: number,
+    r: number, g: number, b: number
+): void {
+    const sx = 2 / w, sy = 2 / h, xy = mesh.xy, half = mesh.width / 2;
+    for (let i = 0; i < xy.length; i += 2) {
+        const screenX = baselineXpx + xy[i + 1]!;
+        const screenY = centerYpx - (xy[i]! - half);
+        out.push(screenX * sx - 1, 1 - screenY * sy, r, g, b);
+    }
+}

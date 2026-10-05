@@ -1,38 +1,48 @@
 {
   "name": "webgpu-plot",
   "version": "1.0.0",
-  "description": "WebGPU-accelerated 2D plotting library",
+  "description": "WebGPU-accelerated 2D plotting with a MATLAB-like API (plot, hold, subplot, legend, ...)",
   "type": "module",
+  "main": "./dist/webgpu-plot.js",
+  "module": "./dist/webgpu-plot.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/webgpu-plot.js",
-      "types": "./dist/plotter.d.ts"
-    }
+      "types": "./dist/index.d.ts",
+      "import": "./dist/webgpu-plot.js"
+    },
+    "./iife": "./dist/webgpu-plot.iife.js"
   },
+  "sideEffects": false,
   "files": [
-    "dist"
+    "dist/webgpu-plot.js",
+    "dist/webgpu-plot.js.map",
+    "dist/webgpu-plot.iife.js",
+    "dist/*.d.ts",
+    "!dist/demo.d.ts"
   ],
   "scripts": {
     "build": "npm run build:types && npm run build:esm && npm run build:iife && npm run build:demo",
-    "build:types": "tsc --emitDeclarationOnly",
-    "build:esm": "esbuild src/plotter.ts --bundle --outfile=dist/webgpu-plot.js --format=esm --platform=browser",
-    "build:iife": "esbuild src/plotter.ts --bundle --outfile=dist/webgpu-plot.iife.js --format=iife --global-name=WebGPUPlot --platform=browser",
-    "build:demo": "esbuild src/index.ts --bundle --outfile=dist/index.js --format=esm",
-    "watch": "esbuild src/index.ts --bundle --outfile=dist/index.js --format=esm --watch",
-    "serve": "npm run build && http-server",
+    "build:types": "tsc -p tsconfig.build.json",
+    "build:esm": "esbuild src/index.ts --bundle --outfile=dist/webgpu-plot.js --format=esm --platform=browser --loader:.ttf=binary --sourcemap",
+    "build:iife": "esbuild src/index.ts --bundle --outfile=dist/webgpu-plot.iife.js --format=iife --global-name=WebGPUPlot --platform=browser --loader:.ttf=binary --minify",
+    "build:demo": "esbuild src/demo.ts --bundle --outfile=dist/demo.js --format=esm --platform=browser --loader:.ttf=binary --sourcemap",
+    "typecheck": "tsc --noEmit",
+    "watch": "esbuild src/demo.ts --bundle --outfile=dist/demo.js --format=esm --platform=browser --loader:.ttf=binary --sourcemap --watch",
+    "serve": "npm run build && npx http-server -c-1",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["webgpu", "plot", "chart", "visualization"],
+  "keywords": ["webgpu", "plot", "chart", "visualization", "matlab"],
   "author": "",
   "license": "ISC",
   "devDependencies": {
     "@types/earcut": "^3.0.0",
-    "@types/opentype.js": "^1.3.9",
-    "@webgpu/types": "^0.1.69",
     "esbuild": "^0.27.3",
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@types/opentype.js": "^1.3.9",
+    "@webgpu/types": "^0.1.69",
     "earcut": "^3.0.2",
     "opentype.js": "^1.3.4"
   }
