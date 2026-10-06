@@ -10,6 +10,22 @@ Everything is computed and rendered on the user's GPU; there is no server compon
 
 > MATLAB is a registered trademark of The MathWorks, Inc. This project is not affiliated with or endorsed by MathWorks.
 
+## Playground
+
+Try the library in the browser, with no installation: **https://ionkrutov.github.io/webgpu_plot/**
+
+The playground has a code editor with autocompletion, ready-made examples (2D basics, large data, surfaces, 3D curves, colormaps) and runs your code live. Each run executes in a sandboxed frame, and plots can be saved as PNG, JPEG or PDF.
+
+## Examples
+
+2D lines (`plot`, `hold`, `legend`):
+
+![sin and cos](images/2D_sin_cos.png)
+
+3D surface (`surf`, `colorbar`):
+
+![surf](images/surf.png)
+
 ## Requirements
 
 A browser with WebGPU (Chrome/Edge 113+, recent Safari and Firefox) on a secure origin (HTTPS or `localhost`).

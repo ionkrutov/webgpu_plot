@@ -27,7 +27,7 @@ export class Runner {
     run(code: string, injectGlobals: boolean): void {
         this.stop();
         const frame = document.createElement('iframe');
-        frame.setAttribute('sandbox', 'allow-scripts');
+        frame.setAttribute('sandbox', 'allow-scripts allow-downloads');
         frame.srcdoc = this.document(code, injectGlobals);
         this.host.appendChild(frame);
         this.frame = frame;
